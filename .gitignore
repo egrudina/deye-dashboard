@@ -1,0 +1,25 @@
+# secrets
+.env
+.env.*
+!.env.example
+push.env
+*.dev.vars
+.dev.vars
+
+# images / dumps (contain secrets)
+*.dmg
+*.cdr
+*.img
+
+# python
+__pycache__/
+*.pyc
+.venv/
+
+# node / wrangler
+node_modules/
+.wrangler/
+dist/
+
+.DS_Store
+.idea/
