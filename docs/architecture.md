@@ -37,13 +37,16 @@ ExecStart=/home/deye/deye_telegram_bot/pusher/run_push.sh
 - Every pusher loop iteration catches `Exception` (but not `CancelledError`). Errors go to the heartbeat and the stdout log, **never Telegram**.
 - Bounded queue (e.g. max 2,880 samples = 24 h). When full, drop the oldest and count the drops.
 - aiohttp: short timeouts (connect 5 s, total 15 s), exponential backoff on failure, batches of up to ~100 samples.
-- The pusher only reads with `inverter.read_holding_registers(588, 88)` (the base library method), so it never touches his
-  `error_count`/`last_error`. Otherwise the Looper could report pusher errors to the debug chat.
-  On `queue.Empty` (timeout), mirror his recovery (`disconnect()` + `_reconnect()`) inside try/except. That way a late
-  response can't be mistaken for the reply to his next request. No counters are touched. *(Decide finally when implementing,
-  and test it with the fake inverter.)*
-- `run_push.sh` fallback: if `push_start.py` exits non-zero → `exec python -u ../start.py`. Note: at boot, when the network is
-  down, both fail (like his code today). The service then restarts as usual. Don't add sleeps that change his restart behavior.
+- The pusher reads with the base `PySolarmanV5.read_holding_registers(inverter, 588, 88)`, never his wrapper, so it never
+  touches his `error_count`/`last_error` (the Looper reports those to the debug chat).
+- **Reads happen on the event-loop thread**, like his. pysolarmanv5 3.0.4 has no locking: a read from another thread could
+  hand its reply to one of his requests.
+- For its own read only, the pusher lowers `inverter.socket_timeout` to 8 s and restores it right after (single thread, so
+  his code never sees it). A hung logger then blocks the process for ~8 s instead of 60 s. After a failed read it recovers
+  like his wrapper (`disconnect()` + `_reconnect()`) and drains a stale reply from the library's queue, then backs off
+  (30 s doubling up to 10 min). Tested with a late reply: it arrives on the closed socket and never reaches his reads.
+- Exit codes: `push_start.py` exits **3** when his bot code fails (run_push.sh exits, systemd restarts as before, no extra
+  "alive" message). Python's own exit **1** means our file is broken → run_push.sh `exec`s his `start.py`.
 - One extra request every 30 s, compared with his 2–3 every 5 s. A hung logger (60 s timeout) freezes the whole process, whoever
   sent the request. That's an accepted, existing risk.
 - Python 3.11 + only the libraries already in his venv (aiohttp, python-dotenv, pysolarmanv5). **No new pip installs on the Pi.**

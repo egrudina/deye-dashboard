@@ -26,3 +26,4 @@ dist/
 
 # local test artifacts
 .playwright-mcp/
+tools/.work/

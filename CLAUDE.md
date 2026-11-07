@@ -55,14 +55,23 @@ The pusher **adds** to that setup. It must never break the bot or the group noti
 
 - [x] Analysis of the bot and the SD image (docs/existing-system.md)
 - [x] Design agreed (docs/architecture.md)
-- [ ] `pi/pusher/`: pusher.py, push_start.py, run_push.sh, push.env.example, override.conf
-- [ ] `tools/`: fake inverter + local runner (his code + fake inverter + user's test bot), failure tests
+- [x] `pi/pusher/`: pusher.py, push_start.py, run_push.sh, push.env.example, override.conf (2026-11-07)
+- [~] `tools/`: fake V5 inverter, failure tests (20/20 pass), fallback routing tests, pusher → local Worker E2E: done.
+  Still to do: full run with the user's test bot (needs `tools/.env`), then the card-writing script.
 - [x] `cloud/`: Worker, D1 migration, Ukrainian PWA. Deployed 2026-11-07 to https://deye.grudina.info
   (Access team `deye-kyiv-1`). PUSH_KEY is a Worker secret; local copy only in `cloud/.env.local` (gitignored).
   Deploy: `cd cloud && set -a && . ./.env.local && set +a && npx wrangler deploy` (token is for this account).
 - [x] User sets up Cloudflare (docs/cloudflare-setup.md)
 - [ ] Clone the card + write files (docs/pi-deployment.md, `tools/` script)
 - [ ] Swap cards, verify via heartbeat in the web app, then verify the register decoding
+
+## Local testing
+
+- `tools/.venv`: Python 3.11 + his `requirements.txt` (`uv venv -p 3.11 tools/.venv && uv pip install -p tools/.venv/bin/python -r <his repo>/requirements.txt`).
+- `python3 tools/fake_inverter.py --slow 12`: Solarman V5 server on 127.0.0.1:8899; switch modes with `curl localhost:8898/mode/<mode>`.
+- `tools/.venv/bin/python tools/test_pusher.py`: pusher failure tests against his real `Inverter` (no Telegram).
+- `tools/make_workdir.sh`: his bot at d537b04 + our `pusher/` laid out like on the Pi, in `tools/.work/`; run
+  `DEYE_BOT_DIR=<workdir> <workdir>/pusher/run_push.sh`. Uses `tools/.env` (the user's TEST bot) and local `wrangler dev`.
 
 ## Known facts
 
