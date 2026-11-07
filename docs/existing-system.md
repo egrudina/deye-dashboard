@@ -105,5 +105,7 @@ WARNING_THRESHOLD, POWER_CRITICAL`
 | 650–652 | Load phase A/B/C W | |
 | 653 | Load total W | |
 
-Other registers in 588–675 (PV power, voltages, etc.) are **unverified**. Check them against the Deye 3-phase
-hybrid map (e.g. the `deye_p3.yaml` definitions in the ha-solarman project) and the real data after deployment.
+Inverter model: **SUN-10K-SG04LP3-EU** (3-phase, 48 V LV battery, 10 kW, 2 MPPT: 26 A + 13 A PV input).
+Other registers in 588–675 (PV power, voltages, etc.) are **unverified**. Use the Deye 3-phase LV hybrid map
+(the `deye_p3.yaml` definitions in the ha-solarman project, which covers SG04LP3) and check against real data
+after deployment. With 2 MPPTs, only PV1/PV2 power (672/673) should be non-zero; PV3/PV4 (674/675) should read 0.

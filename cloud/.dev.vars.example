@@ -1,0 +1,3 @@
+# Copy to .dev.vars for `wrangler dev` (gitignored).
+PUSH_KEY=local-test-key
+DEV_NO_AUTH=1

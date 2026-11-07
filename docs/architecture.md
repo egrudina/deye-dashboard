@@ -90,7 +90,7 @@ Raw registers are decoded **in the Worker**, so mapping fixes never need a card 
   (day/week/month), outage list with durations, health panel (last data age, heartbeat, reboots). UI language: Ukrainian
   (like the bot); confirm with the user.
 
-### Auth (open question: does the user have a domain on the CF account?)
+### Auth (decided 2026-11-07: the user has a custom domain → one Worker on `deye.<domain>`)
 
 - **With a custom domain:** one Worker on `deye.<domain>`. Access application on the hostname with a **Bypass** policy for
   `/api/ingest` (protected by `PUSH_KEY` instead).

@@ -57,12 +57,19 @@ The pusher **adds** to that setup. It must never break the bot or the group noti
 - [x] Design agreed (docs/architecture.md)
 - [ ] `pi/pusher/`: pusher.py, push_start.py, run_push.sh, push.env.example, override.conf
 - [ ] `tools/`: fake inverter + local runner (his code + fake inverter + user's test bot), failure tests
-- [ ] `cloud/`: Worker, D1 migrations, web app
-- [ ] User sets up Cloudflare (docs/cloudflare-setup.md)
+- [x] `cloud/`: Worker, D1 migration, Ukrainian PWA. Deployed 2026-11-07 to https://deye.grudina.info
+  (Access team `deye-kyiv-1`). PUSH_KEY is a Worker secret; local copy only in `cloud/.env.local` (gitignored).
+  Deploy: `cd cloud && set -a && . ./.env.local && set +a && npx wrangler deploy` (token is for this account).
+- [x] User sets up Cloudflare (docs/cloudflare-setup.md)
 - [ ] Clone the card + write files (docs/pi-deployment.md, `tools/` script)
 - [ ] Swap cards, verify via heartbeat in the web app, then verify the register decoding
 
+## Known facts
+
+- Inverter: **Deye SUN-10K-SG04LP3-EU** (10 kW, 3-phase, low-voltage 48 V battery, 2 MPPT).
+  Register map: Deye 3-phase LV hybrid (ha-solarman `deye_p3.yaml`). Confirmed by the user on 2026-11-07.
+- The target Cloudflare account has the user's personal domain → single Worker on `deye.<domain>`, Access on the
+  hostname, Bypass on `/api/ingest` (2026-11-07).
+
 ## Open questions to ask the user
 
-- Does the user have a domain on the target Cloudflare account? This decides the Access setup (see architecture.md).
-- Inverter model (3-phase hybrid, probably SUN-*K-SG0*LP3). Needed to confirm the register map.

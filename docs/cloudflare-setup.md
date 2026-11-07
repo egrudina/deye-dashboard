@@ -24,6 +24,9 @@ Recommended: use an **API token** for the target account, so the existing login 
    - workers.dev: enable Access on the `deye-app` Worker (Settings → Domains & Routes → workers.dev → Enable Cloudflare Access),
      keep `deye-ingest` public (key-protected).
    Login method: one-time PIN to email (default) is fine.
+   Then copy the app's **Application Audience (AUD) tag** and the team domain (`https://<team>.cloudflareaccess.com`)
+   into `ACCESS_AUD` / `ACCESS_TEAM_DOMAIN` in `cloud/wrangler.jsonc`. The Worker checks the Access JWT itself and
+   answers 503 to everything except `/api/ingest` until both are set (fail closed).
 
 ## Free plan limits to keep in mind
 
