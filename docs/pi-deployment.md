@@ -4,7 +4,24 @@ The original card is never modified. It's the rollback: power off, put it back, 
 
 Commands that touch disks need `sudo`. The user runs them with `! sudo …` in the Claude session.
 **Always check the disk number with `diskutil list` before writing. Writing to the wrong disk destroys it.**
-Turn this into a guarded script (`tools/`) that refuses internal disks and checks the size (≥ 15,931,539,456 bytes).
+**Use `tools/card.sh`** (guards: external physical disks of 15.8–256 GB only; checks the card holds his bot at d537b04;
+verifies every written file and runs `e2fsck -fn`). The manual steps below are what it does.
+
+```sh
+tools/card.sh image                               # once: ~/orangepi-raw.cdr
+tools/card.sh check diskN                         # is diskN the card?
+sudo tools/card.sh clone diskN --erase diskN      # dd + cmp verify + e2fsck -fy (journal replay)
+sudo tools/card.sh write diskN test               # rehearsal: YOUR test bot (tools/.env), real inverter; original .env saved on the card
+sudo tools/card.sh write diskN prod               # production: his .env restored byte-identical
+sudo tools/card.sh show diskN                     # state of the card (no secret values)
+```
+
+Rehearsed on an attached copy of the image (`CARD_ALLOW_IMAGE=1`), 2026-11-09: repeated test/prod writes, fs clean,
+.env after prod identical to the original. Lesson: debugfs `mkdir` on an existing directory leaves an orphaned inode,
+so the script only creates what is missing.
+
+The raw image is **15,770,583,040 bytes** (ends exactly at the end of the ext4 partition). The DMG reports 15,931,539,456
+because it includes ~160 MB of unallocated tail, which `hdiutil convert` drops.
 
 ## 1. Make a raw image from the DMG (once)
 
@@ -18,7 +35,7 @@ hdiutil convert ~/git-personal2/deye_telegram_bot/orangepi.dmg -format UDTO -o ~
 diskutil list                          # find the card, e.g. /dev/disk7 (external, physical, ~32 GB)
 diskutil unmountDisk /dev/diskN
 sudo dd if=~/orangepi-raw.cdr of=/dev/rdiskN bs=4m status=progress && sync
-sudo cmp -n 15931539456 ~/orangepi-raw.cdr /dev/rdiskN && echo VERIFIED   # an old card could be flaky
+sudo cmp -n 15770583040 ~/orangepi-raw.cdr /dev/rdiskN && echo VERIFIED   # an old card could be flaky
 ```
 
 macOS will say it can't read the disk → click **Ignore**.

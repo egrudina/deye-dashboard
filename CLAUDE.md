@@ -47,7 +47,7 @@ The pusher **adds** to that setup. It must never break the bot or the group noti
 - His bot (reference only, don't modify): `~/git-personal2/deye_telegram_bot`
   (branch `temporary-disable-warnings`, commit `d537b04`, the same code that runs on the Pi).
 - SD card image backup: `~/git-personal2/deye_telegram_bot/orangepi.dmg` (UDIF lzfse, 15,931,539,456 bytes
-  raw, one ext4 partition). It contains secrets (bot token in `.env`, GitHub PAT). Never commit or share it.
+  per the DMG; the converted raw `~/orangepi-raw.cdr` is 15,770,583,040 bytes, one ext4 partition). It contains secrets (bot token in `.env`, GitHub PAT). Never commit or share it.
   The user may move it out of that folder.
 - `e2fsprogs` is installed via Homebrew: `/opt/homebrew/opt/e2fsprogs/sbin/{debugfs,e2fsck}`.
 
@@ -57,13 +57,15 @@ The pusher **adds** to that setup. It must never break the bot or the group noti
 - [x] Design agreed (docs/architecture.md)
 - [x] `pi/pusher/`: pusher.py, push_start.py, run_push.sh, push.env.example, override.conf (2026-11-07)
 - [~] `tools/`: fake V5 inverter, failure tests (20/20 pass), fallback routing tests, pusher → local Worker E2E: done.
-  Still to do: full run with the user's test bot (needs `tools/.env`), then the card-writing script.
+  Full run with the user's test bot (2026-11-08): buttons, grid off/on notices, pusher read hang (`big_only`) with
+  buttons still answering and nothing from the pusher in Telegram, pusher self-recovery: all OK.
+  `tools/card.sh` (clone + debugfs write, test/prod modes): done, rehearsed on an image copy.
 - [x] `cloud/`: Worker, D1 migration, Ukrainian PWA. Deployed 2026-11-07 to https://deye.grudina.info
   (Access team `deye-kyiv-1`). PUSH_KEY is a Worker secret; local copy only in `cloud/.env.local` (gitignored).
   Deploy: `cd cloud && set -a && . ./.env.local && set +a && npx wrangler deploy` (token is for this account).
 - [x] User sets up Cloudflare (docs/cloudflare-setup.md)
-- [ ] Clone the card + write files (docs/pi-deployment.md, `tools/` script)
-- [ ] Swap cards, verify via heartbeat in the web app, then verify the register decoding
+- [ ] Clone the card + `write test` (user's test bot on the real Pi + real inverter) → swap, verify heartbeat + register decoding
+- [ ] `write prod` on the same card → swap, verify (docs/pi-deployment.md)
 
 ## Local testing
 
