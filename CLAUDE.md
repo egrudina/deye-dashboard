@@ -77,6 +77,9 @@ The pusher **adds** to that setup. It must never break the bot or the group noti
 - [ ] Decide whether to widen `REG_START/REG_COUNT` in the pusher (now 588..675): battery voltage (587?), temperatures and
   the daily/total kWh counters (~500–540) are outside the range. Needs one more card visit.
 
+- [ ] Dashboard v2 (app-like PWA: projection, Yasno schedule, Solcast forecast, push). Cloud only. Plan agreed
+  2026-11-13: `docs/dashboard-v2-plan.md`.
+
 ## Local testing
 
 - `tools/.venv`: Python 3.11 + his `requirements.txt` (`uv venv -p 3.11 tools/.venv && uv pip install -p tools/.venv/bin/python -r <his repo>/requirements.txt`).
