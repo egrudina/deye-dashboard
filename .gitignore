@@ -10,6 +10,9 @@ push.env
 *.dmg
 *.cdr
 *.img
+# backup/ holds the original card image (bot token, GitHub PAT in it): only its README is tracked
+backup/*
+!backup/README.md
 
 # python
 __pycache__/

@@ -2,9 +2,13 @@
 # Prepares the CLONE SD card for the Pi (no SSH): clone the image, write the pusher files with debugfs.
 # The original card is never touched; it is the rollback.
 #
-#   tools/card.sh image                      make ~/orangepi-raw.cdr from orangepi.dmg (once, no sudo)
+#   tools/card.sh image                      build backup/orangepi-full.img = DMG partition + the ORIGINAL bootloader
+#                                            area (backup/orig-boot-4m.bin). Once, no sudo. The DMG alone has no
+#                                            bootloader: a card cloned from it does not boot (blank HDMI).
+#   sudo tools/card.sh bootarea diskN        read-only: save the first 4 MiB of the ORIGINAL card to
+#                                            backup/orig-boot-4m.bin (only needed if that file is lost)
 #   tools/card.sh check diskN                show what diskN is and whether it passes the guards (no sudo)
-#   sudo tools/card.sh clone diskN --erase diskN    write the raw image to the card, verify, fix the journal
+#   sudo tools/card.sh clone diskN --erase diskN    write the full image to the card, verify, fix the journal
 #   sudo tools/card.sh write diskN test      pusher + override; .env uses YOUR test bot (tools/.env),
 #                                            keeps the real INVERTER_IP/SERIAL; original .env saved on the card
 #   sudo tools/card.sh write diskN prod      pusher + override; .env restored to the original (his bot)
@@ -12,14 +16,22 @@
 #
 # Guards: only external, physical disks of 15.9-256 GB. A disk image (hdiutil attach) is allowed only with
 # CARD_ALLOW_IMAGE=1, for rehearsals on the Mac. Secrets are never printed.
+# 'clone' refuses an image without the bootloader. 'write' refuses a card with a dirty journal (the Pi was
+# powered off after booting it): run e2fsck -fy first, or debugfs writes get overwritten by the journal replay
+# on the next boot (cross-linked blocks, 2026-11-12). Both also refuse while macOS has the ext4 volume mounted.
+# backup/ (gitignored, contains secrets) holds the original DMG, the bootloader dump and the full image.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 USER_HOME="$(eval echo "~${SUDO_USER:-$USER}")"
 HIS_REPO="${HIS_REPO:-$(cd "$ROOT/.." && pwd)/deye_telegram_bot}"
 HIS_COMMIT=d537b04
-DMG="${DMG:-$HIS_REPO/orangepi.dmg}"
-IMG="${IMG:-$USER_HOME/orangepi-raw.cdr}"
+BACKUP="$ROOT/backup"
+DMG="${DMG:-$BACKUP/orangepi.dmg}"
+[ -f "$DMG" ] || DMG="$HIS_REPO/orangepi.dmg"
+IMG="${IMG:-$BACKUP/orangepi-full.img}"
+BOOT_BIN="${BOOT_BIN:-$BACKUP/orig-boot-4m.bin}"
+BOOT_SIZE=4194304     # sectors 0..8191 = MBR + bootloader (U-Boot SPL at 8 KiB); the ext4 partition starts at 4 MiB
 IMG_SIZE=15770583040  # raw image = end of the ext4 partition (the DMG adds ~160 MB of unallocated tail)
 MAX_SIZE=$((256 * 1000 * 1000 * 1000))
 E2=/opt/homebrew/opt/e2fsprogs/sbin
@@ -56,6 +68,20 @@ guard_disk() {  # $1 = diskN; prints a summary, dies if the disk is not acceptab
 }
 
 part_of() { echo "/dev/${1}s1"; }
+
+# Allwinner boot ROM looks for the SPL ("eGON.BT0") at 8 KiB. Without it the Pi shows nothing at all.
+has_bootloader() {  # $1 = file or raw device (reads must be 512-byte aligned; the magic is at 8 KiB + 4)
+  dd if="$1" bs=512 skip=16 count=1 2>/dev/null | LC_ALL=C grep -qa 'eGON.BT0'
+}
+
+# A macOS ext4 driver (e.g. the ExtendFS app in ~/Downloads) auto-mounts the partition read-only, remounts it
+# right after 'diskutil unmountDisk', and makes e2fsck/debugfs refuse. Remove/quit that driver, then replug.
+guard_unmounted() {  # $1 = diskN
+  if mount | grep -q "^/dev/${1}s[0-9]* "; then
+    mount | grep "^/dev/${1}s[0-9]* " >&2
+    die "macOS has /dev/$1 mounted. Try: diskutil unmountDisk /dev/$1. If it comes back, an ext4 driver (ExtendFS?) is mounting it: delete/quit it, eject, replug."
+  fi
+}
 
 dbg() { "$E2/debugfs" -R "$1" "$2" 2>/dev/null; }  # read-only query
 
@@ -117,8 +143,28 @@ token_of() { env_get "$1" BOT_TOKEN | tr -d "\"' \r"; }
 cmd_image() {
   [ -f "$IMG" ] && { echo "already there: $IMG"; ls -l "$IMG"; return; }
   [ -f "$DMG" ] || die "DMG not found: $DMG (set DMG=...)"
-  hdiutil convert "$DMG" -format UDTO -o "${IMG%.cdr}"
+  [ -f "$BOOT_BIN" ] || die "bootloader dump not found: $BOOT_BIN. Put the ORIGINAL card in the Mac and run: sudo $0 bootarea diskN"
+  [ "$(stat -f %z "$BOOT_BIN")" = "$BOOT_SIZE" ] && has_bootloader "$BOOT_BIN" || die "$BOOT_BIN is not a valid bootloader dump"
+  mkdir -p "$(dirname "$IMG")"; chmod 700 "$(dirname "$IMG")"
+  hdiutil convert "$DMG" -format UDTO -o "$IMG.tmp"          # -> $IMG.tmp.cdr (partition only, no bootloader)
+  mv "$IMG.tmp.cdr" "$IMG.tmp"
+  # The DMG's MBR matches the dump; only the zeroed gap before the partition differs. Overlay sectors 0..8191.
+  dd if="$BOOT_BIN" of="$IMG.tmp" bs=512 count=$((BOOT_SIZE / 512)) conv=notrunc 2>/dev/null
+  [ "$(stat -f %z "$IMG.tmp")" = "$IMG_SIZE" ] || die "unexpected image size, left as $IMG.tmp"
+  mv "$IMG.tmp" "$IMG"; chmod 600 "$IMG"
   ls -l "$IMG"
+}
+
+cmd_bootarea() {  # read-only dump of the ORIGINAL card's MBR + bootloader area
+  local d="$1"; need_root bootarea "$d"
+  [ ! -e "$BOOT_BIN" ] || die "$BOOT_BIN already exists; move it away first"
+  guard_disk "$d"
+  diskutil unmountDisk "/dev/$d" >/dev/null 2>&1 || true
+  mkdir -p "$(dirname "$BOOT_BIN")"
+  dd if="/dev/r$d" of="$BOOT_BIN" bs=512 count=$((BOOT_SIZE / 512))
+  chown "${SUDO_USER:-$USER}" "$BOOT_BIN"; chmod 600 "$BOOT_BIN"
+  has_bootloader "$BOOT_BIN" || { rm -f "$BOOT_BIN"; die "no bootloader (eGON.BT0) at 8 KiB: wrong card? Dump removed."; }
+  echo "saved $BOOT_BIN ($(shasum -a 256 "$BOOT_BIN" | cut -c1-16)...). Now: $0 image"
 }
 
 cmd_check() {
@@ -133,6 +179,7 @@ cmd_clone() {
   guard_disk "$d"
   [ -f "$IMG" ] || die "raw image not found: $IMG (run: $0 image)"
   [ "$(stat -f %z "$IMG")" = "$IMG_SIZE" ] || die "$IMG has an unexpected size"
+  has_bootloader "$IMG" || die "$IMG has no bootloader (eGON.BT0 at 8 KiB): the card would not boot. See: $0 image"
   echo ">> ERASING /dev/$d and writing $IMG (about 10-20 min)"
   diskutil unmountDisk "/dev/$d"
   dd if="$IMG" of="/dev/r$d" bs=4m status=progress
@@ -143,6 +190,7 @@ cmd_clone() {
   diskutil unmountDisk "/dev/$d" >/dev/null 2>&1 || true
   local p; p="$(part_of "$d")"
   [ -e "$p" ] || die "$p not visible yet: unplug and replug the card, then run: sudo $E2/e2fsck -fy $p"
+  guard_unmounted "$d"
   echo ">> replaying the journal / fixing the filesystem"
   set +e; "$E2/e2fsck" -fy "$p"; local rc=$?; set -e
   [ "$rc" -lt 4 ] || die "e2fsck failed ($rc)"
@@ -155,8 +203,14 @@ cmd_write() {
   guard_disk "$d"
   local p; p="$(part_of "$d")"
   [ -e "$p" ] || die "$p not found"
+  guard_unmounted "$d"
   set +e; "$E2/e2fsck" -fn "$p" >/dev/null 2>&1; local rc=$?; set -e
   [ "$rc" -eq 0 ] || die "filesystem not clean (e2fsck -fn = $rc). Run: sudo $E2/e2fsck -fy $p"
+  # e2fsck -n does not replay the journal and still returns 0. debugfs writes bypass the journal, so on the
+  # next boot the Pi replays stale metadata over our changes (cross-linked blocks, 2026-11-12). Refuse.
+  if dbg "features" "$p" | grep -q needs_recovery; then
+    die "the journal has not been replayed (the Pi was powered off after its last boot). Run: sudo $E2/e2fsck -fy $p, then retry"
+  fi
 
   T="$(mktemp -d)"; chmod 700 "$T"; trap 'rm -rf "${T:-}"' EXIT
   guard_card_content "$p" "$T"
@@ -293,13 +347,20 @@ cmd_show() {
   fi
   dbg "dump $BOT/pusher/.env.original $T/s" "$p" >/dev/null
   [ -s "$T/s" ] && echo "   saved original .env: yes (pusher/.env.original)" || echo "   saved original .env: no"
+  if dbg "features" "$p" | grep -q needs_recovery; then
+    echo "   journal: NOT replayed (needs_recovery). Run e2fsck -fy before any 'write'."
+  else
+    echo "   journal: clean"
+  fi
+  has_bootloader "/dev/r$d" && echo "   bootloader (eGON.BT0 at 8 KiB): present" || echo "   bootloader: MISSING, the card will not boot"
 }
 
 case "${1:-}" in
   image) cmd_image ;;
+  bootarea) [ $# -ge 2 ] || die "usage: sudo $0 bootarea diskN   (the ORIGINAL card)"; cmd_bootarea "$2" ;;
   check) [ $# -ge 2 ] || die "usage: $0 check diskN"; cmd_check "$2" ;;
   clone) [ $# -ge 2 ] || die "usage: sudo $0 clone diskN --erase diskN"; cmd_clone "$2" "${3:-}" "${4:-}" ;;
   write) [ $# -ge 3 ] || die "usage: sudo $0 write diskN test|prod"; cmd_write "$2" "$3" ;;
   show)  [ $# -ge 2 ] || die "usage: sudo $0 show diskN"; cmd_show "$2" ;;
-  *) sed -n '2,15p' "$0"; exit 1 ;;
+  *) sed -n '2,25p' "$0"; exit 1 ;;
 esac

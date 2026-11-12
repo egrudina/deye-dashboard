@@ -46,9 +46,11 @@ The pusher **adds** to that setup. It must never break the bot or the group noti
 
 - His bot (reference only, don't modify): `~/git-personal2/deye_telegram_bot`
   (branch `temporary-disable-warnings`, commit `d537b04`, the same code that runs on the Pi).
-- SD card image backup: `~/git-personal2/deye_telegram_bot/orangepi.dmg` (UDIF lzfse, 15,931,539,456 bytes
-  per the DMG; the converted raw `~/orangepi-raw.cdr` is 15,770,583,040 bytes, one ext4 partition). It contains secrets (bot token in `.env`, GitHub PAT). Never commit or share it.
-  The user may move it out of that folder.
+- SD card image backup: **`backup/`** in this repo (gitignored except its README; see `backup/README.md`): the original
+  `orangepi.dmg`, `orig-boot-4m.bin` (MBR + U-Boot, read from the original card) and `orangepi-full.img` (15,770,583,040 bytes,
+  bootable copy of the original card), with `SHA256SUMS`. They contain secrets (bot token in `.env`, GitHub PAT). Never commit or share them.
+  The DMG alone has **no bootloader**. The originals also still exist at `~/git-personal2/deye_telegram_bot/orangepi.dmg`
+  and `~/orangepi-raw.cdr` (no bootloader; don't clone from it). The original SD card itself is the first-choice rollback.
 - `e2fsprogs` is installed via Homebrew: `/opt/homebrew/opt/e2fsprogs/sbin/{debugfs,e2fsck}`.
 
 ## Status
@@ -64,8 +66,16 @@ The pusher **adds** to that setup. It must never break the bot or the group noti
   (Access team `deye-kyiv-1`). PUSH_KEY is a Worker secret; local copy only in `cloud/.env.local` (gitignored).
   Deploy: `cd cloud && set -a && . ./.env.local && set +a && npx wrangler deploy` (token is for this account).
 - [x] User sets up Cloudflare (docs/cloudflare-setup.md)
-- [ ] Clone the card + `write test` (user's test bot on the real Pi + real inverter) → swap, verify heartbeat + register decoding
-- [ ] `write prod` on the same card → swap, verify (docs/pi-deployment.md)
+- [x] Clone the card + `write test` (user's test bot on the real Pi + real inverter) → swap, verify heartbeat + register
+  decoding (2026-11-12: bot answered with real data, samples in D1, battery/grid/SOC match the bot, phases sum up).
+  The first boot failed: the image had **no bootloader** (blank HDMI); fixed by copying the original card's first 4 MiB.
+- [x] `write prod` on the same card → swap, verify (2026-11-12). It first failed to boot (initramfs, cross-linked
+  blocks): `write` after a boot without `e2fsck -fy` corrupts the card. Repaired, `card.sh` now guards it.
+  Now running: his bot and group answer, pusher sends a sample every 30 s. Pitfalls: docs/pi-deployment.md.
+- [ ] Check the cloud data over a full day (2026-11-13): PV registers (672–675) in daylight, per-phase load against a
+  known appliance (decoded from 650–652; 640–642 holds a near-identical set), a real grid off/on transition in `grid_events`.
+- [ ] Decide whether to widen `REG_START/REG_COUNT` in the pusher (now 588..675): battery voltage (587?), temperatures and
+  the daily/total kWh counters (~500–540) are outside the range. Needs one more card visit.
 
 ## Local testing
 
