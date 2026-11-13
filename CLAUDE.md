@@ -77,8 +77,9 @@ The pusher **adds** to that setup. It must never break the bot or the group noti
 - [ ] Decide whether to widen `REG_START/REG_COUNT` in the pusher (now 588..675): battery voltage (587?), temperatures and
   the daily/total kWh counters (~500–540) are outside the range. Needs one more card visit.
 
-- [ ] Dashboard v2 (app-like PWA: projection, Yasno schedule, Solcast forecast, push). Cloud only. Plan agreed
-  2026-11-13: `docs/dashboard-v2-plan.md`.
+- [x] Dashboard v2 (app-like PWA: projection, Yasno schedule, Solcast forecast, push). Cloud only. Plan agreed
+  2026-11-13: `docs/dashboard-v2-plan.md`. Built and deployed 2026-11-13 on branch `dashboard-v2` (not merged yet):
+  `docs/dashboard-v2-progress.md`. Still to check on real phones (install, push).
 
 ## Local testing
 
