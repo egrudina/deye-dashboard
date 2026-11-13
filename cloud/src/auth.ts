@@ -25,7 +25,7 @@ function b64urlDecode(s: string): Uint8Array<ArrayBuffer> {
   return out;
 }
 
-/** Returns the user's email if the Access JWT is valid, otherwise null. */
+/** Returns the user's email (or "service:<client id>" for a service token) if the Access JWT is valid, otherwise null. */
 export async function verifyAccess(request: Request, teamDomain: string, aud: string): Promise<string | null> {
   const token = request.headers.get("Cf-Access-Jwt-Assertion");
   if (!token) return null;
@@ -35,7 +35,7 @@ export async function verifyAccess(request: Request, teamDomain: string, aud: st
     const dec = new TextDecoder();
     const header = JSON.parse(dec.decode(b64urlDecode(parts[0]))) as { alg: string; kid: string };
     const payload = JSON.parse(dec.decode(b64urlDecode(parts[1]))) as {
-      aud: string | string[]; exp: number; nbf?: number; iss: string; email?: string;
+      aud: string | string[]; exp: number; nbf?: number; iss: string; email?: string; common_name?: string;
     };
     if (header.alg !== "RS256") return null;
 
@@ -59,7 +59,10 @@ export async function verifyAccess(request: Request, teamDomain: string, aud: st
     if (payload.exp < now - 30) return null;
     if (payload.nbf && payload.nbf > now + 30) return null;
     if (payload.iss.replace(/\/$/, "") !== teamDomain.replace(/\/$/, "")) return null;
-    return payload.email ?? "unknown";
+    // Users have an email; Access service tokens (e.g. Home Assistant) have only common_name (the client id).
+    if (payload.email) return payload.email;
+    if (payload.common_name) return `service:${payload.common_name}`;
+    return null;
   } catch {
     return null;
   }

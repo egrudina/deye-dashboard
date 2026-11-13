@@ -341,3 +341,22 @@ test("settings: merge validates input", () => {
   assert.equal(DEFAULT_SETTINGS.phase, "all");
   assert.equal(mergeSettings(DEFAULT_SETTINGS, null).phase, "all");
 });
+
+test("energy totals: rolled-up hours + raw tail = one integration, whatever the cut (HA totals never drop)", () => {
+  const start = Date.parse("2026-11-13T00:00:00Z");
+  const s: PowerSample[] = [];
+  for (let t = start + 7_000; t < start + 6 * HOUR; t += 30_000 + ((t / 1000) % 7) * 1000) {
+    if (t > start + 2.2 * HOUR && t < start + 2.4 * HOUR) continue; // a gap > 5 min
+    s.push(smp(t, { load_total: 500 + ((t / 30_000) % 13) * 50, batt_w: ((t / 30_000) % 3) - 1 > 0 ? 400 : -900 }));
+  }
+  const now = start + 6 * HOUR - 10_000;
+  const whole = integrateSpan(s, start, now);
+  for (const h of [1, 2, 3, 4]) {
+    const cut = start + h * HOUR;
+    const rolled = sumRows(integrateHours(s, start, cut));
+    const tail = integrateSpan(s, cut, now);
+    for (const k of ["load_wh", "batt_charge_wh", "batt_discharge_wh", "grid_import_wh"] as const) {
+      assert.ok(Math.abs(rolled[k] + tail[k] - whole[k]) < 1e-6, `${k} cut=${h}h: ${rolled[k] + tail[k]} vs ${whole[k]}`);
+    }
+  }
+});

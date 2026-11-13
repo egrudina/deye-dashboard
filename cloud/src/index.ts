@@ -4,6 +4,7 @@ import { ingest, type GridTransition } from "./ingest.ts";
 import { calibrate, rollup, solcast, yasno, type JobStatus } from "./jobs.ts";
 import { onCron, onIngest, pushEndpoints } from "./notify.ts";
 import { analyse, loadContext, nowPayload, outageDurations, planPayload, sharedConfig } from "./summary.ts";
+import { haPayload } from "./ha.ts";
 import { getAllConfig, getUserSettings, putUserSettings, sharedPatch } from "./settings.ts";
 import { DAY, HOUR, kyivDate, kyivTime, addDays } from "./time.ts";
 
@@ -43,6 +44,10 @@ export default {
       if (!e) return new Response("Forbidden", { status: 403 });
       email = e.toLowerCase();
     }
+    // Service tokens (Home Assistant) may only read the HA endpoint.
+    if (email.startsWith("service:") && !(request.method === "GET" && url.pathname === "/api/ha")) {
+      return json({ error: "forbidden for service tokens" }, 403);
+    }
 
     if (url.pathname.startsWith("/api/")) {
       try {
@@ -73,6 +78,7 @@ export default {
           case "/api/outage-log": return json(await apiOutageLog(env, url));
           case "/api/forecast-actual": return json(await apiForecastActual(env, url));
           case "/api/health": return json(await apiHealth(env));
+          case "/api/ha": return json(await haPayload(env));
         }
       } catch (e) {
         if (e instanceof BadRequest) return json({ error: e.message }, 400);

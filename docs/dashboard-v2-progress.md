@@ -31,7 +31,8 @@ it now also reports grid transitions to the push code, which runs in `ctx.waitUn
 ## API (all behind Access, except ingest)
 
 GET `/api/now`, `/api/plan`, `/api/me`, `/api/series`, `/api/outages`, `/api/hourly`, `/api/daily?days&end`,
-`/api/outage-log`, `/api/forecast-actual?from&to`, `/api/health`.
+`/api/outage-log`, `/api/forecast-actual?from&to`, `/api/health`, `/api/ha` (Home Assistant; the only path an
+Access service token may use, see `docs/home-assistant.md`).
 Writes (JSON only, same origin): PUT `/api/settings`, PUT `/api/shared`, POST `/api/run {job}`,
 POST `/api/push/subscribe|unsubscribe|test`.
 
