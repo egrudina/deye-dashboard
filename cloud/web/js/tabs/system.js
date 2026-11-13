@@ -179,7 +179,9 @@ function renderHealth() {
   els.health.replaceChildren(h("h2", "Стан системи"), hl ? h("dl.kv", rows) : h("p.muted", "Завантаження…"),
     h("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap", marginTop: "10px" } },
       h("button.btn", { onclick: (e) => runJob(e.target, "yasno") }, "Оновити графік"),
-      h("button.btn", { onclick: (e) => runJob(e.target, "rollup") }, "Перерахувати енергію")));
+      h("button.btn", { onclick: (e) => runJob(e.target, "rollup") }, "Перерахувати енергію"),
+      // The installed PWA has no browser reload; this loads a newly deployed version (the service worker is network-first).
+      h("button.btn", { onclick: () => location.reload() }, "Перезавантажити")));
 
   // Grid voltages from the last /api/now.
   const s = cached("now")?.sample;
