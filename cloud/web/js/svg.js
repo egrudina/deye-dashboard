@@ -9,6 +9,23 @@ export function el(name, attrs = {}, parent) {
   parent?.append(e);
   return e;
 }
+// One tooltip for all charts. On phones there is no "pointer leave", so hide it on scroll,
+// on a tap outside a chart, on tab switch, on redraw, and 3 s after a touch.
+let tipTimer;
+export function hideTip() {
+  clearTimeout(tipTimer);
+  const t = document.getElementById("tooltip");
+  if (t) t.hidden = true;
+  for (const c of document.querySelectorAll("svg .cross")) c.setAttribute("visibility", "hidden");
+}
+function autoHide(ev) {
+  clearTimeout(tipTimer);
+  if (ev.pointerType !== "mouse") tipTimer = setTimeout(hideTip, 3000);
+}
+window.addEventListener("scroll", hideTip, { passive: true });
+document.addEventListener("pointerdown", (e) => { if (!e.target.closest?.(".chart")) hideTip(); });
+document.addEventListener("visibilitychange", hideTip);
+
 export const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
 export function niceTicks(min, max, count) {
@@ -41,6 +58,7 @@ function timeTicks(from, to) {
  *         y: { min, max, unit, fmt }, shades: [{ start, end, cls }], floor: number, now: ms, label, gapMs }
  */
 export function timeChart(container, opts) {
+  hideTip();
   container.replaceChildren();
   const W = container.clientWidth || 320, H = container.clientHeight || 200;
   const m = { l: 40, r: 8, t: 8, b: 22 };
@@ -147,6 +165,7 @@ export function timeChart(container, opts) {
       tip.append(row);
     }
     tip.hidden = false;
+    autoHide(ev);
     const tx = Math.min(ev.clientX + 12, window.innerWidth - tip.offsetWidth - 8);
     tip.style.left = `${Math.max(8, tx)}px`;
     tip.style.top = `${Math.max(8, ev.clientY - tip.offsetHeight - 12)}px`;
@@ -162,6 +181,7 @@ export function timeChart(container, opts) {
  * opts: { items: [{ key, label, parts: [{ v, cls, name }], marker? }], unit fmt, label, line: [{ v }] }
  */
 export function barChart(container, opts) {
+  hideTip();
   container.replaceChildren();
   const W = container.clientWidth || 320, H = container.clientHeight || 200;
   const m = { l: 40, r: 8, t: 8, b: 22 };
@@ -204,6 +224,7 @@ export function barChart(container, opts) {
         row.append(key, val, name); tip.append(row);
       }
       tip.hidden = false;
+      autoHide(ev);
       const tx = Math.min(ev.clientX + 12, window.innerWidth - tip.offsetWidth - 8);
       tip.style.left = `${Math.max(8, tx)}px`;
       tip.style.top = `${Math.max(8, ev.clientY - tip.offsetHeight - 12)}px`;

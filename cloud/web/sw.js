@@ -1,6 +1,6 @@
 // Service worker: network-first for static files with a cache fallback, and Web Push.
 // Navigations and /api are not intercepted, so Cloudflare Access login redirects keep working.
-const CACHE = "deye-v4";
+const CACHE = "deye-v5";
 const ASSETS = [
   "/style.css", "/js/main.js", "/js/api.js", "/js/fmt.js", "/js/dom.js", "/js/svg.js", "/js/graphics.js",
   "/js/push.js", "/js/tabs/now.js", "/js/tabs/plan.js", "/js/tabs/history.js", "/js/tabs/system.js",

@@ -2,7 +2,7 @@
 // the outage log against the schedule, solar forecast vs actual, a daily summary.
 
 import { get, AuthError } from "../api.js";
-import { h, put } from "../dom.js";
+import { h, put, keepScroll } from "../dom.js";
 import * as f from "../fmt.js";
 import { barChart, legend, nights, timeChart } from "../svg.js";
 
@@ -78,7 +78,8 @@ export async function refresh() {
   }
 }
 
-function draw() {
+function draw() { keepScroll(drawNow); }
+function drawNow() {
   if (!cache.daily || !els.summary) return;
   drawSummary();
   drawMain();

@@ -1,7 +1,7 @@
 // Tab 1: Зараз. The headline sentence, big numbers, graphics. Data: /api/now.
 
 import { cached, load, AuthError } from "../api.js";
-import { h } from "../dom.js";
+import { h, keepScroll } from "../dom.js";
 import * as f from "../fmt.js";
 import { batteryRing, dayStrip, energyFlow, phaseBars } from "../graphics.js";
 import { isIos, isStandalone } from "../push.js";
@@ -30,7 +30,8 @@ export async function refresh() {
   }
 }
 
-function render() {
+function render() { keepScroll(renderNow); }
+function renderNow() {
   const d = data, s = d.sample, now = d.server_ms;
   const settings = app.settings();
   const names = app.me?.shared?.phase_names ?? d.shared?.phase_names ?? { a: "A", b: "B", c: "C" };
@@ -88,7 +89,10 @@ function render() {
 
   // ---------- flow ----------
   const flow = h("div.flow");
-  const flowCard = h("section.card", h("h2", "Потоки енергії"), flow);
+  // In = grid + sun + battery discharge; out = house + battery charge. The rest is the inverter's own use and losses.
+  const overhead = (s.grid_on ? Math.max(0, s.grid_total_w ?? 0) : 0) + Math.max(0, s.pv_w ?? 0) + (s.batt_w ?? 0) - (s.load_total ?? 0);
+  const flowCard = h("section.card", h("h2", "Потоки енергії"), flow,
+    overhead >= 30 ? h("p.note", `Ще ${f.W(overhead)} — власне споживання і втрати інвертора.`) : null);
 
   // ---------- load ----------
   const main = settings.phase && settings.phase !== "all" ? settings.phase : null;

@@ -5,6 +5,7 @@ export class AuthError extends Error {}
 async function call(path, opts = {}) {
   const res = await fetch(path, { credentials: "same-origin", cache: "no-store", ...opts });
   if (res.redirected || res.status === 401 || res.status === 403) {
+    try { sessionStorage.setItem("scrollY", String(window.scrollY)); } catch { /* blocked */ }
     location.reload();
     throw new AuthError("auth");
   }

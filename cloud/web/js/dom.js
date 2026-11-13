@@ -16,3 +16,12 @@ export function h(tag, attrs, ...children) {
 
 /** replaceChildren without the null/false entries (which it would print as text). */
 export const put = (el, ...children) => el.replaceChildren(...children.flat().filter((c) => c != null && c !== false));
+
+/** Re-render without moving the page: keep the scroll position across a full replace of the content. */
+export function keepScroll(fn) {
+  const y = window.scrollY;
+  fn();
+  if (Math.abs(window.scrollY - y) > 1) window.scrollTo(0, y);
+  // Some browsers (iOS) settle the layout a frame later.
+  requestAnimationFrame(() => { if (Math.abs(window.scrollY - y) > 1) window.scrollTo(0, y); });
+}

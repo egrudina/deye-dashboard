@@ -1,6 +1,7 @@
 // App shell: bottom tabs (hash routes), no reloads between tabs, refresh on a timer and on return to foreground.
 
 import { cached, load, AuthError } from "./api.js";
+import { hideTip } from "./svg.js";
 
 const TABS = {
   now: { title: "Зараз", load: () => import("./tabs/now.js") },
@@ -47,9 +48,18 @@ async function route() {
     if (a.dataset.tab === name) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
   }
   app.freshness(null);
+  hideTip();
   view.replaceChildren();
   window.scrollTo(0, 0);
   mod.mount(view, app);
+  restoreScroll();
+}
+
+// After a forced reload (expired login), come back to the same place.
+function restoreScroll() {
+  let y = null;
+  try { y = sessionStorage.getItem("scrollY"); sessionStorage.removeItem("scrollY"); } catch { /* blocked */ }
+  if (y != null) requestAnimationFrame(() => window.scrollTo(0, Number(y)));
 }
 
 window.addEventListener("hashchange", route);

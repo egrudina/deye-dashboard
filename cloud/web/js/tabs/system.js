@@ -1,7 +1,7 @@
 // Tab 4: Система. Personal settings, notifications, shared settings, health, grid voltages.
 
 import { send, cached, load, AuthError } from "../api.js";
-import { h } from "../dom.js";
+import { h, keepScroll } from "../dom.js";
 import * as f from "../fmt.js";
 
 let root, app, alive = false, health = null;
@@ -36,7 +36,8 @@ const NOTIFY = [
 ];
 
 let els = {};
-function render() {
+function render() { keepScroll(renderNow); }
+function renderNow() {
   const me = app.me;
   if (!me) { root.replaceChildren(h("p.empty-state", "Завантаження…")); return; }
   const s = me.settings, sh = me.shared;

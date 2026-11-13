@@ -1,7 +1,7 @@
 // Tab 2: План. One 48-hour timeline (lanes + battery + power) and the same in words. Data: /api/plan.
 
 import { cached, load, AuthError } from "../api.js";
-import { h } from "../dom.js";
+import { h, keepScroll } from "../dom.js";
 import * as f from "../fmt.js";
 import { el, legend, nights, timeChart } from "../svg.js";
 
@@ -33,7 +33,8 @@ const CONF = {
   none: "Графіка й історії відключень немає: прогноз приблизний.",
 };
 
-function render() {
+function render() { keepScroll(renderNow); }
+function renderNow() {
   const d = data, now = d.server_ms, p = d.projection;
   const showNeighbour = app.settings().neighbour !== false;
   const lanes = h("div.chart", { style: { height: showNeighbour ? "52px" : "34px" } });
