@@ -1,7 +1,7 @@
 // Cron jobs: hourly energy rollups, Yasno schedule, Solcast forecast, calibration. Each job is independent.
 
 import { HOUR_FIELDS, MAX_GAP_MS, integrateHours, type PowerSample } from "./energy.ts";
-import { countCall, correctionFactor, isThrottled, parseForecast, solcastDue, type SolcastBudget } from "./solcast.ts";
+import { countCall, correctionFactor, markBusy, isThrottled, parseForecast, solcastDue, type SolcastBudget } from "./solcast.ts";
 import { getConfig, setConfig, setConfigStmt } from "./settings.ts";
 import { DAY, HOUR, kyivDate } from "./time.ts";
 import {
@@ -157,12 +157,20 @@ export async function solcast(env: Env, now = Date.now(), force = false): Promis
   if (!force && !solcastDue(now, budget)) return false;
   if (force && budget && budget.utc_date === new Date(now).toISOString().slice(0, 10) && budget.calls >= 9) return false;
   // Count the call before making it: a failed call may still use quota.
-  await setConfig(env.DB, "solcast_budget", countCall(now, budget));
+  const wasRetry = !!budget?.busy_at && budget.busy_at === budget.last_call;
+  const counted = countCall(now, budget);
+  await setConfig(env.DB, "solcast_budget", counted);
   try {
     const res = await fetch(`https://api.solcast.com.au/rooftop_sites/${encodeURIComponent(site)}/forecasts?format=json&hours=72`, {
       headers: { authorization: `Bearer ${key}`, accept: "application/json" },
       signal: AbortSignal.timeout(20_000),
     });
+    if (res.status === 429) {
+      // Hobbyist keys get 429 when Solcast is busy, not only when the daily quota is used up.
+      const text = (await res.text()).trim().slice(0, 120);
+      await setConfig(env.DB, "solcast_budget", markBusy(counted, wasRetry));
+      throw new Error(`solcast 429 (${text || "сервер зайнятий"})${wasRetry ? "" : ", повтор за 15 хв"}`);
+    }
     if (!res.ok) throw new Error(`solcast ${res.status}: ${(await res.text()).slice(0, 120)}`);
     const periods = parseForecast(await res.json());
     const today = kyivDate(now);

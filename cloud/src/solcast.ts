@@ -5,13 +5,21 @@ import { kyivMinuteOfDay, kyivDate, kyivTime } from "./time.ts";
 export const SOLCAST_DAILY_LIMIT = 10;  // free plan, per UTC day
 export const SOLCAST_RESERVE = 2;
 
-/** Planned call times, Kyiv minutes from midnight: before sunrise to mid-afternoon, none at night. */
-export const CALL_SLOTS = [5 * 60, 7 * 60, 8 * 60 + 30, 10 * 60, 11 * 60 + 30, 13 * 60, 14 * 60 + 30, 16 * 60];
+/**
+ * Planned call times, Kyiv minutes from midnight: before sunrise to mid-afternoon, none at night.
+ * 10 minutes past the hour / half-hour, so the 15-minute cron calls at :15 / :45: Solcast answers
+ * hobbyist keys with 429 "busy" most often right at :00 / :30, when everyone's schedules fire.
+ */
+export const CALL_SLOTS = [5 * 60, 7 * 60, 8 * 60 + 30, 10 * 60, 11 * 60 + 30, 13 * 60, 14 * 60 + 30, 16 * 60].map((m) => m + 10);
+
+/** Wait before retrying a call Solcast rejected as busy (429). One retry per slot. */
+export const BUSY_RETRY_MS = 15 * 60_000;
 
 export interface SolcastBudget {
   utc_date: string;   // UTC day the counter belongs to
   calls: number;      // calls made that UTC day (successful or not)
   last_call?: number; // ms
+  busy_at?: number;   // last_call of a slot call that got 429 → one retry is allowed
 }
 
 /**
@@ -21,6 +29,9 @@ export interface SolcastBudget {
 export function solcastDue(now: number, budget: SolcastBudget | null, sites = 1): boolean {
   const utc = new Date(now).toISOString().slice(0, 10);
   const calls = budget && budget.utc_date === utc ? budget.calls : 0;
+  // Retry after a 429 "busy": allowed into the reserve, but always leaves one call for a manual refresh.
+  if (budget?.busy_at && budget.busy_at === budget.last_call && now - budget.busy_at >= BUSY_RETRY_MS
+    && (calls + 1) * sites <= SOLCAST_DAILY_LIMIT - 1) return true;
   if ((calls + 1) * sites > SOLCAST_DAILY_LIMIT - SOLCAST_RESERVE) return false;
   const slots = sites > 1 ? CALL_SLOTS.filter((_, i) => i % sites === 0) : CALL_SLOTS;
   const minute = kyivMinuteOfDay(now);
@@ -36,6 +47,11 @@ export function countCall(now: number, budget: SolcastBudget | null): SolcastBud
   const utc = new Date(now).toISOString().slice(0, 10);
   const calls = budget && budget.utc_date === utc ? budget.calls : 0;
   return { utc_date: utc, calls: calls + 1, last_call: now };
+}
+
+/** After a 429: mark the call busy so solcastDue allows one retry. A failed retry is not retried again. */
+export function markBusy(budget: SolcastBudget, wasRetry: boolean): SolcastBudget {
+  return wasRetry ? budget : { ...budget, busy_at: budget.last_call };
 }
 
 export interface ForecastPeriod { period_end: number; p50: number; p10: number; p90: number } // kW

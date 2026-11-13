@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { integrateHours, integrateSpan, sumRows, type PowerSample } from "../src/energy.ts";
 import { applyResolved, loudHours, mergeSlots, norm, parseGroup, pickMatch, resolveDue, streetQuery, YasnoFormatError } from "../src/yasno.ts";
-import { correctionFactor, countCall, forecastAt, forecastEnergy, parseForecast, solcastDue, isThrottled } from "../src/solcast.ts";
+import { correctionFactor, countCall, markBusy, forecastAt, forecastEnergy, parseForecast, solcastDue, isThrottled } from "../src/solcast.ts";
 import { loadProfile, median, project, type ProjectionInput } from "../src/projection.ts";
 import { headline, fmtClock } from "../src/headline.ts";
 import { kyivDate, kyivMinuteOfDay, kyivOffsetMin, kyivTime, addDays, HOUR } from "../src/time.ts";
@@ -182,20 +182,41 @@ test("solcast budget: slots in Kyiv time, never more than 8 a UTC day, none at n
   assert.equal(solcastDue(t1, null), true);
   let b = countCall(t1, null);
   assert.equal(solcastDue(t1 + 15 * 60_000, b), false);
-  // 07:05 Kyiv: next slot.
-  assert.equal(solcastDue(at("2026-11-13T05:05:00Z"), b), true);
+  // 07:05 Kyiv: slot starts at 07:10, not yet. 07:15: due.
+  assert.equal(solcastDue(at("2026-11-13T05:05:00Z"), b), false);
+  assert.equal(solcastDue(at("2026-11-13T05:15:00Z"), b), true);
   // Over budget.
-  b = { utc_date: "2026-11-13", calls: 8, last_call: at("2026-11-13T05:05:00Z") };
+  b = { utc_date: "2026-11-13", calls: 8, last_call: at("2026-11-13T05:15:00Z") };
   assert.equal(solcastDue(at("2026-11-13T12:00:00Z"), b), false);
-  // Evening: the last slot (16:00) was already used → nothing until tomorrow.
-  b = { utc_date: "2026-11-13", calls: 5, last_call: at("2026-11-13T14:01:00Z") };
+  // Evening: the last slot (16:10) was already used → nothing until tomorrow.
+  b = { utc_date: "2026-11-13", calls: 5, last_call: at("2026-11-13T14:15:00Z") };
   assert.equal(solcastDue(at("2026-11-13T20:00:00Z"), b), false);
   // New UTC day resets the counter.
   assert.equal(countCall(at("2026-11-14T03:10:00Z"), { utc_date: "2026-11-13", calls: 8 }).calls, 1);
   // Two sites: every second slot, and the count doubles.
-  assert.equal(solcastDue(at("2026-11-13T05:05:00Z"), { utc_date: "2026-11-13", calls: 1, last_call: at("2026-11-13T03:10:00Z") }, 2), false);
-  assert.equal(solcastDue(at("2026-11-13T06:35:00Z"), { utc_date: "2026-11-13", calls: 3, last_call: at("2026-11-13T03:10:00Z") }, 2), true);
-  assert.equal(solcastDue(at("2026-11-13T06:35:00Z"), { utc_date: "2026-11-13", calls: 4, last_call: at("2026-11-13T03:10:00Z") }, 2), false);
+  assert.equal(solcastDue(at("2026-11-13T05:15:00Z"), { utc_date: "2026-11-13", calls: 1, last_call: at("2026-11-13T03:15:00Z") }, 2), false);
+  assert.equal(solcastDue(at("2026-11-13T06:45:00Z"), { utc_date: "2026-11-13", calls: 3, last_call: at("2026-11-13T03:15:00Z") }, 2), true);
+  assert.equal(solcastDue(at("2026-11-13T06:45:00Z"), { utc_date: "2026-11-13", calls: 4, last_call: at("2026-11-13T03:15:00Z") }, 2), false);
+});
+
+test("solcast 429 busy: one retry 15 min later, may use the reserve, never the last call", () => {
+  const at = (iso: string) => Date.parse(iso);
+  // 13:15 Kyiv slot call (7th of the day) got 429.
+  const t = at("2026-11-13T11:15:00Z");
+  let b = markBusy(countCall(t, { utc_date: "2026-11-13", calls: 6, last_call: at("2026-11-13T09:45:00Z") }), false);
+  assert.equal(solcastDue(t + 10 * 60_000, b), false);
+  assert.equal(solcastDue(t + 15 * 60_000, b), true);
+  // The retry also got 429: no second retry; the next slot (14:40) still runs.
+  const r = t + 15 * 60_000;
+  b = markBusy(countCall(r, b), true);
+  assert.equal(b.calls, 8);
+  assert.equal(solcastDue(r + 15 * 60_000, b), false);
+  assert.equal(solcastDue(at("2026-11-13T12:45:00Z"), b), false); // 8 used: plan cap reached
+  // A retry may go to 9, not 10.
+  b = { utc_date: "2026-11-13", calls: 8, last_call: t, busy_at: t };
+  assert.equal(solcastDue(t + 15 * 60_000, b), true);
+  b = { utc_date: "2026-11-13", calls: 9, last_call: t, busy_at: t };
+  assert.equal(solcastDue(t + 15 * 60_000, b), false);
 });
 
 test("solcast parse, lookup and energy", () => {
