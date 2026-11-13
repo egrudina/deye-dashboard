@@ -13,3 +13,6 @@ export function h(tag, attrs, ...children) {
   for (const c of children.flat()) if (c != null && c !== false) e.append(c instanceof Node ? c : String(c));
   return e;
 }
+
+/** replaceChildren without the null/false entries (which it would print as text). */
+export const put = (el, ...children) => el.replaceChildren(...children.flat().filter((c) => c != null && c !== false));

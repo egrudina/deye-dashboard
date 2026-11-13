@@ -302,6 +302,11 @@ test("headline: outage lasts / runs out / charges before / no schedule", () => {
   const h3 = headline(hin({ proj: charge, scheduledSoon: true }));
   assert.equal(h3.text, "Зарядиться до 100% до наступного відключення о 20:00.");
 
+  const full = project(base({ soc: 100, outages: [{ start: NOW + 8 * HOUR, end: NOW + 12 * HOUR }] }));
+  const h3b = headline(hin({ proj: full, soc: 100, scheduledSoon: true }));
+  assert.equal(h3b.text, "Батарея повна. Відключення о 20:00 витримає.");
+  assert.match(h3b.detail!, /^Світло повернеться завтра о 00:00, залишиться \d+%\.$/);
+
   const none = project(base({ confidence: "history" }));
   const h4 = headline(hin({ proj: none, scheduleKnown: false, recentDrop: true }));
   assert.match(h4.text, /^Графіка від Yasno немає\. За поточного споживання батареї вистачить приблизно/);

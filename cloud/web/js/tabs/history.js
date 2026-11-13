@@ -2,7 +2,7 @@
 // the outage log against the schedule, solar forecast vs actual, a daily summary.
 
 import { get, AuthError } from "../api.js";
-import { h } from "../dom.js";
+import { h, put } from "../dom.js";
 import * as f from "../fmt.js";
 import { barChart, legend, nights, timeChart } from "../svg.js";
 
@@ -38,7 +38,7 @@ function build() {
     sun: h("section.card"),
     outages: h("section.card"),
   };
-  root.replaceChildren(
+  put(root, 
     h("section.card", h("div.chart-head", seg, h("div", { style: { display: "flex", gap: "6px", alignItems: "center" } }, prev, date, next))),
     els.summary, els.main, els.phases, els.sun, els.outages,
   );
@@ -74,7 +74,7 @@ export async function refresh() {
     cache = { daily, series, log, fa, outages: outages.outages, from, to: range === "day" ? f.kyivMidnight(midnightOf(endDate) + 30 * 3600e3) : end, at: Date.now() };
     draw();
   } catch (e) {
-    if (alive && !(e instanceof AuthError)) els.summary.replaceChildren(h("p.err", `Не вдалося завантажити: ${e.message}`));
+    if (alive && !(e instanceof AuthError)) put(els.summary, h("p.err", `Не вдалося завантажити: ${e.message}`));
   }
 }
 
@@ -105,7 +105,7 @@ function drawSummary() {
   const pvShare = t.load_wh > 0 ? Math.min(1, t.pv_wh / t.load_wh) : null;
   const title = range === "day" ? `Підсумок: ${f.weekday(midnightOf(endDate) + 12 * 3600e3)}` : `Підсумок за ${days.length} дн.`;
   const stat = (v, l) => h("div.stat", h("div.v", v), h("div.l", l));
-  els.summary.replaceChildren(
+  put(els.summary, 
     h("h2", title),
     t.hours === 0 ? h("p.muted", "За цей період даних немає.") : h("div.stats",
       stat(f.kWh(t.load_wh), "спожито"),
@@ -126,7 +126,7 @@ function drawMain() {
   if (range === "month" || !series) {
     // Month: daily energy bars (sources).
     const c = h("div.chart"), lg = h("div.legend");
-    els.main.replaceChildren(h("h2", "Енергія по днях, кВт·год"), lg, c,
+    put(els.main, h("h2", "Енергія по днях, кВт·год"), lg, c,
       h("p.note", "Пунктир — скільки спожито. Автономність — частка споживання без мережі."));
     legend(lg, [{ name: "Сонце", color: "--s2" }, { name: "З мережі", color: "--s4" }]);
     barChart(c, {
@@ -141,7 +141,7 @@ function drawMain() {
     return;
   }
   const pw = h("div.chart"), soc = h("div.chart.chart-small"), lg = h("div.legend");
-  els.main.replaceChildren(h("h2", "Потужність"), lg, pw, h("h3", "Заряд батареї, %"), soc,
+  put(els.main, h("h2", "Потужність"), lg, pw, h("h3", "Заряд батареї, %"), soc,
     h("p.note", h("span.swatch-off"), " сірим — без світла. Батарея: «+» розряд, «−» заряд."),
     tableDetails(series));
   const shades = cache.outages.map((o) => ({ start: o.start, end: o.end ?? Date.now(), cls: "off" }));
@@ -177,7 +177,7 @@ function drawPhases() {
   if (range === "day") {
     // Hourly kWh per phase for the day.
     const c = h("div.chart"), lg = h("div.legend");
-    els.phases.replaceChildren(h("h2", "Споживання по фазах, кВт·год за годину"), lg, c);
+    put(els.phases, h("h2", "Споживання по фазах, кВт·год за годину"), lg, c);
     legend(lg, [{ name: names.a, color: "--s1" }, { name: names.b, color: "--s1" }, { name: names.c, color: "--s1" }]);
     get(`/api/hourly?from=${midnightOf(endDate)}&to=${f.kyivMidnight(midnightOf(endDate) + 30 * 3600e3)}`).then((r) => {
       if (!alive) return;
@@ -196,7 +196,7 @@ function drawPhases() {
     return;
   }
   const c = h("div.chart"), lg = h("div.legend");
-  els.phases.replaceChildren(h("h2", "Споживання по фазах, кВт·год за добу"), lg, c, dailyTable(days, names));
+  put(els.phases, h("h2", "Споживання по фазах, кВт·год за добу"), lg, c, dailyTable(days, names));
   legend(lg, [{ name: names.a, color: "--s1" }, { name: names.b, color: "--s1" }, { name: names.c, color: "--s1" }]);
   lg.children[1]?.style.setProperty("--c", "color-mix(in srgb, var(--s1) 62%, var(--surface))");
   lg.children[2]?.style.setProperty("--c", "color-mix(in srgb, var(--s1) 34%, var(--surface))");
@@ -236,7 +236,7 @@ function drawSun() {
   const fcMap = new Map(fa.forecast.map((x) => [x.period_end, x.p50 * 1000]));
   let sf = 0, sa = 0, n = 0;
   for (const a of pairs) { const fw = fcMap.get(a.pe); if (fw != null && fw >= 300) { sf += fw; sa += a.pv; n++; } }
-  els.sun.replaceChildren(h("h2", "Сонце: прогноз і факт"), lg, c,
+  put(els.sun, h("h2", "Сонце: прогноз і факт"), lg, c,
     h("p.note", n >= 4 ? `На неурізаних даних факт = ${f.pct((sa / sf) * 100)} від прогнозу (${n} півгодин).`
       : "Мало даних для порівняння: коли батарея повна, панелі урізаються, і такі проміжки не враховуються."),
     h("p.note", "Світлі точки — батарея повна, сонце урізане (не порівнюється)."));
@@ -276,7 +276,7 @@ function drawOutages() {
     h("span.when", f.when(c.ts)),
     h("span.what", `${c.date}: ${slotsText(c.before)} → ${slotsText(c.after)}`)));
   const typical = log.durations_ms.length ? [...log.durations_ms].sort((a, b) => a - b)[log.durations_ms.length >> 1] : null;
-  els.outages.replaceChildren(
+  put(els.outages, 
     h("h2", "Відключення"),
     typical ? h("p.note", `Типова тривалість: ${f.duration(typical)} (${log.durations_ms.length} відключень за період)`) : null,
     real.length ? h("ul.list", items) : h("p.muted", "За останні 30 днів відключень не було."),

@@ -93,6 +93,9 @@ function outageHeadline(inp: HeadlineInput, proj: Projection): Headline {
         text: `Відключення ${atClock(next.start, now)}: батарея сяде близько ${fmtClock(empty, now)}, раніше, ніж повернеться світло.${cut}`,
       };
     }
+    if (inp.soc >= 99) {
+      return { mode: "outage", tone: "ok", text: `Батарея повна. Відключення ${atClock(next.start, now)} витримає.`, detail: lastsDetail(next, now) };
+    }
     if (proj.full_at != null && proj.full_at <= next.start) {
       return { mode: "outage", tone: "ok", text: `Зарядиться до 100% до наступного відключення ${atClock(next.start, now)}.`, detail: lastsDetail(next, now) };
     }

@@ -141,13 +141,13 @@ function render() {
     gridLines.map((l) => h("div.sub", l)),
   );
 
-  root.replaceChildren(
+  root.replaceChildren(...[
     installHint(),
     headline,
     h("div.grid2", battCard, flowCard),
     h("div.grid2", loadCard, sunCard),
     gridCard,
-  );
+  ].filter(Boolean));
 
   dayStrip(strip, { now: Date.now(), outages: d.home_intervals ?? [], loud: showLoud ? d.generator : [] });
   batteryRing(ring, { soc: s.soc, floor: b.floor_pct ?? 15, ghost: d.ghost, sub: d.ghost ? `→ ${f.pct(d.ghost.soc)}` : "" });
