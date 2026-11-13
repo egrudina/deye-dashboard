@@ -4,11 +4,11 @@ import { el, cssVar } from "./svg.js";
 import * as f from "./fmt.js";
 
 /** Battery ring: soc arc, the floor as a marked zone, a ghost tick where the projection ends. */
-export function batteryRing(container, { soc, floor = 15, ghost = null, sub = "" }) {
+export function batteryRing(container, { soc, floor = 15, ghost = null, sub = "", sub2 = "" }) {
   container.replaceChildren();
   const size = 132, r = 54, c = 2 * Math.PI * r, sw = 12;
   const svg = el("svg", { viewBox: `0 0 ${size} ${size}`, role: "img",
-    "aria-label": `Заряд ${Math.round(soc)}%. Нижня межа ${floor}%.${ghost ? ` За прогнозом буде ${Math.round(ghost.soc)}%.` : ""}` }, container);
+    "aria-label": `Заряд ${Math.round(soc)}%. Нижня межа ${floor}%.${ghost ? ` За прогнозом буде ${Math.round(ghost.soc)}%${sub2 ? ` ${sub2}` : ""}.` : ""}` }, container);
   const g = el("g", { transform: `rotate(-90 ${size / 2} ${size / 2})` }, svg);
   const arc = (cls, from, to, extra = {}) => el("circle", {
     class: cls, cx: size / 2, cy: size / 2, r, fill: "none", "stroke-width": sw,
@@ -24,8 +24,10 @@ export function batteryRing(container, { soc, floor = 15, ghost = null, sub = ""
     const dx = Math.cos(a), dy = Math.sin(a);
     el("line", { class: "ghost", x1: cx - dx * 9, y1: cy - dy * 9, x2: cx + dx * 9, y2: cy + dy * 9, "stroke-linecap": "round" }, g);
   }
-  el("text", { x: size / 2, y: size / 2 + 8, "text-anchor": "middle", "font-size": 30 }, svg).textContent = `${Math.round(soc)}%`;
-  if (sub) el("text", { class: "rsub", x: size / 2, y: size / 2 + 26, "text-anchor": "middle" }, svg).textContent = sub;
+  const up = sub && sub2 ? 5 : 0;
+  el("text", { x: size / 2, y: size / 2 + 8 - up, "text-anchor": "middle", "font-size": 30 }, svg).textContent = `${Math.round(soc)}%`;
+  if (sub) el("text", { class: "rsub", x: size / 2, y: size / 2 + 26 - up, "text-anchor": "middle" }, svg).textContent = sub;
+  if (sub && sub2) el("text", { class: "rsub rsub2", x: size / 2, y: size / 2 + 33, "text-anchor": "middle" }, svg).textContent = sub2;
 }
 
 const ICONS = {

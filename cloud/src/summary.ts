@@ -3,7 +3,7 @@
 import { integrateSpan, sumRows, type HourRow, type PowerSample } from "./energy.ts";
 import { headline, type Headline } from "./headline.ts";
 import { POWER_COLS, dayFromRow, type JobStatus } from "./jobs.ts";
-import { loadProfile, project, typicalOutageMs, type Confidence, type Interval, type Projection } from "./projection.ts";
+import { SWITCH_GRACE_MS, loadProfile, project, typicalOutageMs, type Confidence, type Interval, type Projection } from "./projection.ts";
 import { DEFAULT_BATTERY, DEFAULT_PHASES, getAllConfig, type BatteryConfig, type PhaseNames } from "./settings.ts";
 import { forecastEnergy, type ForecastPeriod, type SolcastBudget } from "./solcast.ts";
 import { DAY, HOUR, addDays, kyivDate, kyivMidnight, kyivTime } from "./time.ts";
@@ -67,7 +67,9 @@ export async function loadContext(env: Env, now = Date.now()): Promise<Context> 
   ]);
 
   const sample = (latest.results[0] as Context["sample"]) ?? null;
-  const ev = (lastEvent.results[0] as { ts: number; grid_on: number; prev_ts: number } | undefined) ?? null;
+  // One-sample flickers are not outages: "since" and the history ignore them.
+  const evList = dropBlips(events.results as { ts: number; grid_on: number; prev_ts: number }[]);
+  const ev = evList[evList.length - 1] ?? (lastEvent.results[0] as { ts: number; grid_on: number; prev_ts: number } | undefined) ?? null;
   const recentSamples = recent.results as PowerSample[];
   const lastHour = integrateSpan(recentSamples, now - HOUR, now);
   const recentLoadW = lastHour.covered_s > 600 ? lastHour.load_wh / (lastHour.covered_s / 3600) : (sample?.load_total ?? 0);
@@ -92,9 +94,23 @@ export async function loadContext(env: Env, now = Date.now()): Promise<Context> 
     lastHour, recentLoadW, today: todayRow, hourlyRecent: hourlyRows,
     forecast: fc.results as unknown as ForecastPeriod[],
     days: { home: parseDays("home"), neighbour: parseDays("neighbour") },
-    events: events.results as { ts: number; grid_on: number; prev_ts: number }[],
+    events: evList,
     config,
   };
+}
+
+/** The grid can flicker off for one sample when the inverter switches over. Shorter than this is not an outage. */
+export const BLIP_MS = 2 * 60_000;
+
+/** Drop off→on pairs shorter than `minMs` from grid events (sorted by ts). An outage still in progress is kept. */
+export function dropBlips<T extends { ts: number; grid_on: number }>(events: T[], minMs = BLIP_MS): T[] {
+  const out: T[] = [];
+  for (const e of events) {
+    const last = out[out.length - 1];
+    if (e.grid_on === 1 && last && last.grid_on === 0 && e.ts - last.ts < minMs) out.pop();
+    else out.push(e);
+  }
+  return out;
 }
 
 /** Past outage durations (ms) from grid events. */
@@ -176,16 +192,20 @@ export function analyse(ctx: Context): Analysis {
   const scheduledSoon = confidence === "schedule" && homeIntervals.some((i) => i.end > now && i.start < now + 48 * HOUR);
   const recentDrop = ctx.events.some((e) => e.grid_on === 0 && e.ts > now - 7 * DAY);
 
+  // Switching can take a few minutes after the scheduled time: no "mismatch" inside that window.
   let mismatch: string | null = null;
+  let lateReturn: number | null = null;
   if (sample && scheduleKnown) {
-    const schedOff = homeIntervals.some((i) => i.start <= now && i.end > now);
-    if (schedOff && gridOn) mismatch = "За графіком зараз відключення, але світло є.";
-    if (!schedOff && !gridOn) mismatch = "Світла немає, хоча за графіком воно має бути.";
+    const cur = homeIntervals.find((i) => i.start <= now && i.end > now);
+    const nearEdge = homeIntervals.some((i) => Math.abs(now - i.start) <= SWITCH_GRACE_MS || Math.abs(now - i.end) <= SWITCH_GRACE_MS);
+    if (cur && gridOn && !nearEdge) mismatch = "За графіком зараз відключення, але світло є.";
+    if (!cur && !gridOn && !nearEdge) mismatch = "Світла немає, хоча за графіком воно має бути.";
+    if (!cur && !gridOn) lateReturn = homeIntervals.find((i) => i.end <= now && now - i.end <= SWITCH_GRACE_MS)?.end ?? null;
   }
 
   const hl = headline({
     now, gridOnNow: gridOn, soc: sample?.soc ?? 0, proj, scheduleKnown, emergency, scheduledSoon, recentDrop,
-    sunWh, needWh,
+    sunWh, needWh, lateReturn,
   });
 
   return {
@@ -239,6 +259,7 @@ export function nowPayload(ctx: Context, a: Analysis) {
     grid: {
       scheduled_now: curHome, next_outage: nextHome,
       expected_return: curOut?.end ?? null,
+      return_scheduled: !!curOut && a.confidence === "schedule" && !curOut.end_guessed,
       mismatch: a.schedule.mismatch,
     },
     schedule: { today: a.schedule.today, tomorrow: a.schedule.tomorrow, fetched_at: a.schedule.fetched_at },
@@ -252,10 +273,10 @@ export function nowPayload(ctx: Context, a: Analysis) {
 }
 
 /** Where the projection says the battery will be: end of the current/next outage, else in 48 h. */
-function ghost(proj: Projection | null): { soc: number; at: number | null; kind: "outage_end" | "horizon" } | null {
+function ghost(proj: Projection | null): { soc: number; at: number | null; kind: "outage_end" | "horizon"; guessed?: boolean } | null {
   if (!proj) return null;
   const o = proj.outages.find((x) => x.in_progress) ?? proj.outages[0];
-  if (o) return { soc: o.soc_end_low, at: o.end, kind: "outage_end" };
+  if (o) return { soc: o.soc_end_low, at: o.end, kind: "outage_end", guessed: !!o.end_guessed || proj.confidence !== "schedule" };
   const last = proj.points[proj.points.length - 1];
   return { soc: last.soc, at: last.t, kind: "horizon" };
 }

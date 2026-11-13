@@ -1,7 +1,7 @@
 // The one plain sentence on the main screen. Pure; texts in Ukrainian.
 
 import type { Projection } from "./projection.ts";
-import { kyivDate, kyivParts, addDays } from "./time.ts";
+import { HOUR, kyivDate, kyivParts, kyivTime, addDays } from "./time.ts";
 
 export type Tone = "ok" | "info" | "warn" | "bad";
 export type Mode = "outage" | "sun_covers" | "sun_partial" | "plain";
@@ -19,6 +19,7 @@ export interface HeadlineInput {
   recentDrop: boolean;          // the grid went off in the last 7 days
   sunWh: number | null;         // forecast sun energy today (Kyiv day), corrected; null = no forecast
   needWh: number | null;        // expected need today
+  lateReturn?: number | null;   // grid still off although the scheduled outage ended at this time, a few minutes ago
 }
 
 export function fmtClock(ts: number, now: number): string {
@@ -59,6 +60,48 @@ export function headline(inp: HeadlineInput): Headline {
   return sunHeadline(inp);
 }
 
+/** "Till tomorrow's sun": the next 08:00 (Kyiv) that is at least 6 h away. */
+export function nextMorning(now: number): number {
+  const today = kyivDate(now);
+  const t = kyivTime(today, 8 * 60);
+  return t - now >= 6 * HOUR ? t : kyivTime(addDays(today, 1), 8 * 60);
+}
+
+/** One short remark about today's sun, or nothing without a forecast. */
+function sunNote(inp: HeadlineInput): string | undefined {
+  const { sunWh, needWh } = inp;
+  if (sunWh == null || needWh == null || needWh <= 0) return undefined;
+  const share = (sunWh / needWh) * 100;
+  if (share >= 100) return "Сьогодні сонце покриває все";
+  if (share < 3) return "Сьогодні сонця майже немає";
+  if (share < 25) return "Сьогодні сонця мало";
+  return `Сьогодні сонце покриє близько ${pct(share)} потреби`;
+}
+
+const join = (...parts: (string | undefined)[]) => parts.filter(Boolean).map((p) => `${p}.`).join(" ") || undefined;
+
+/**
+ * Schedule known: one verdict for the whole stretch until the morning, counting every outage, the grid
+ * hours in between and the sun (pessimistic scenario).
+ */
+function verdict(inp: HeadlineInput, proj: Projection): Headline {
+  const { now } = inp;
+  const until = nextMorning(now);
+  const sun = sunNote(inp);
+  const fail = proj.outages.find((o) => !o.lasts && o.start < until);
+  if (fail) {
+    const empty = fail.empty_at ?? proj.empty_at_low ?? fail.start;
+    const cut = fail.cut_w != null ? ` Зменште споживання на ${fail.cut_w} Вт${fail.in_progress ? "" : " під час відключення"}.` : " Зменште споживання до мінімуму.";
+    const back = fail.end != null ? `Світло повернеться ${atClock(fail.end, now)}` : undefined;
+    return { mode: "outage", tone: fail.in_progress ? "bad" : "warn", text: `Батарея сяде близько ${fmtClock(empty, now)}.${cut}`, detail: join(back, sun) };
+  }
+  let low = proj.points[0];
+  for (const p of proj.points) if (p.t <= until && p.soc_low < low.soc_low) low = p;
+  const morning = kyivDate(until) === kyivDate(now) || kyivParts(now).h >= 15 ? "ранку" : "завтрашнього ранку";
+  const min = low.soc_low < inp.soc - 1 ? `Найменше буде близько ${pct(low.soc_low)} ${atClock(low.t, now)}` : undefined;
+  return { mode: "outage", tone: "ok", text: `Батареї вистачить до ${morning}.`, detail: join(min, sun) };
+}
+
 function outageHeadline(inp: HeadlineInput, proj: Projection): Headline {
   const { now } = inp;
   const cur = proj.outages.find((o) => o.in_progress);
@@ -68,14 +111,9 @@ function outageHeadline(inp: HeadlineInput, proj: Projection): Headline {
     : !inp.scheduleKnown ? "Графіка від Yasno немає." : "";
 
   if (!inp.gridOnNow) {
-    if (cur && cur.end != null && known) {
-      if (cur.lasts) {
-        return { mode: "outage", tone: "ok", text: `Вистачить до повернення світла ${atClock(cur.end, now)}. Залишиться ${pct(cur.soc_end_low)}.` };
-      }
-      const empty = cur.empty_at ?? proj.empty_at_low ?? now;
-      const before = fmtHours(cur.end - empty);
-      const cut = cur.cut_w != null ? ` Зменште споживання на ${cur.cut_w} Вт, щоб дотягнути.` : " Зменште споживання до мінімуму.";
-      return { mode: "outage", tone: "bad", text: `Батарея сяде близько ${fmtClock(empty, now)}, за ${before} до повернення світла.${cut}` };
+    if (cur && cur.end != null && known && !cur.end_guessed) return verdict(inp, proj);
+    if (inp.lateReturn != null && known) {
+      return { mode: "outage", tone: "info", text: `Світло мало повернутися ${atClock(inp.lateReturn, now)}. Перемикання може тривати до 10 хв.` };
     }
     // Unknown end: history or nothing.
     const base = `Світла немає. За поточного споживання батареї вистачить ${runtime(proj.runtime_h)}.`;
@@ -83,28 +121,7 @@ function outageHeadline(inp: HeadlineInput, proj: Projection): Headline {
   }
 
   // Grid on now.
-  const next = proj.outages.find((o) => !o.in_progress);
-  if (next && known) {
-    if (!next.lasts) {
-      const empty = next.empty_at ?? next.start;
-      const cut = next.cut_w != null ? ` Під час нього зменште споживання на ${next.cut_w} Вт.` : "";
-      return {
-        mode: "outage", tone: "warn",
-        text: `Відключення ${atClock(next.start, now)}: батарея сяде близько ${fmtClock(empty, now)}, раніше, ніж повернеться світло.${cut}`,
-      };
-    }
-    if (inp.soc >= 99) {
-      return { mode: "outage", tone: "ok", text: `Батарея повна. Відключення ${atClock(next.start, now)} витримає.`, detail: lastsDetail(next, now) };
-    }
-    if (proj.full_at != null && proj.full_at <= next.start) {
-      return { mode: "outage", tone: "ok", text: `Зарядиться до 100% до наступного відключення ${atClock(next.start, now)}.`, detail: lastsDetail(next, now) };
-    }
-    return {
-      mode: "outage", tone: "ok",
-      text: `До відключення ${atClock(next.start, now)} зарядиться до ${pct(next.soc_start)}. Цього вистачить.`,
-      detail: lastsDetail(next, now),
-    };
-  }
+  if (known && proj.outages.some((o) => !o.in_progress)) return verdict(inp, proj);
   if (inp.emergency || !inp.scheduleKnown) {
     return {
       mode: "outage", tone: "info",
@@ -114,11 +131,6 @@ function outageHeadline(inp: HeadlineInput, proj: Projection): Headline {
   // Schedule known and no outage within 48 h (recent drop triggered the mode): fall through to the sun.
   const sun = sunHeadline(inp);
   return { ...sun, detail: sun.detail ?? "За графіком відключень найближчі 48 год немає." };
-}
-
-function lastsDetail(o: { end: number | null; soc_end_low: number }, now: number): string | undefined {
-  if (o.end == null) return undefined;
-  return `Світло повернеться ${atClock(o.end, now)}, залишиться ${pct(o.soc_end_low)}.`;
 }
 
 function sunHeadline(inp: HeadlineInput): Headline {

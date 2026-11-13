@@ -6,7 +6,7 @@ import { correctionFactor, countCall, forecastAt, forecastEnergy, parseForecast,
 import { loadProfile, median, project, type ProjectionInput } from "../src/projection.ts";
 import { headline, fmtClock } from "../src/headline.ts";
 import { kyivDate, kyivMinuteOfDay, kyivOffsetMin, kyivTime, addDays, HOUR } from "../src/time.ts";
-import { intervalsFromDays, outageDurations } from "../src/summary.ts";
+import { dropBlips, intervalsFromDays, outageDurations } from "../src/summary.ts";
 import { mergeSettings, DEFAULT_SETTINGS } from "../src/settings.ts";
 
 // ---------- time ----------
@@ -163,6 +163,14 @@ test("outage durations from grid events", () => {
   assert.deepEqual(outageDurations([{ ts: 0, grid_on: 1 }, { ts: 10, grid_on: 0 }, { ts: 40, grid_on: 1 }, { ts: 50, grid_on: 0 }]), [30]);
 });
 
+test("a one-sample grid flicker is not an outage; a real or ongoing outage is kept", () => {
+  const m = 60_000, e = (ts: number, grid_on: number) => ({ ts, grid_on });
+  const ev = [e(0, 0), e(200 * m, 1), e(500 * m, 0), e(500.5 * m, 1), e(900 * m, 0)];
+  assert.deepEqual(dropBlips(ev), [e(0, 0), e(200 * m, 1), e(900 * m, 0)]);
+  assert.deepEqual(dropBlips([e(0, 0), e(0.5 * m, 1)]), []);
+  assert.deepEqual(dropBlips([e(0, 0)]), [e(0, 0)]);
+});
+
 // ---------- Solcast ----------
 
 test("solcast budget: slots in Kyiv time, never more than 8 a UTC day, none at night", () => {
@@ -273,11 +281,15 @@ test("projection: load profile from hourly rows; median", () => {
     { hour_ts: kyivTime("2026-11-12", 3 * 60), load_wh: 250, covered_s: 1800 }, // 50% covered → skipped
     { hour_ts: kyivTime("2026-11-12", 4 * 60), load_wh: 400, covered_s: 3600 },
   ];
-  const prof = loadProfile(rows)!;
+  const prof = loadProfile(rows, 1)!;
   assert.equal(prof[18], 1500);
   assert.equal(prof[4], 400);
   assert.equal(prof[3], 1000); // overall median of [2000, 1000, 400]
   assert.equal(loadProfile([]), null);
+  // Few days of history: an hour is pulled towards the overall median (1000).
+  const soft = loadProfile(rows)!;
+  assert.equal(soft[18], (2000 + 1000 + 1000) / 3);
+  assert.equal(soft[4], (400 + 2 * 1000) / 3);
 });
 
 // ---------- headline ----------
@@ -287,25 +299,30 @@ const hin = (o = {}) => ({
   recentDrop: false, sunWh: null, needWh: null, ...o,
 });
 
-test("headline: outage lasts / runs out / charges before / no schedule", () => {
+test("headline: one verdict until the morning / runs out / no schedule", () => {
   const lasts = project(base({ gridOnNow: false, outages: [{ start: NOW - HOUR, end: NOW + 6 * HOUR }] }));
-  const h1 = headline(hin({ gridOnNow: false, proj: lasts, scheduledSoon: true }));
-  assert.match(h1.text, /^Вистачить до повернення світла о 18:00\. Залишиться \d+%\.$/);
+  const h1 = headline(hin({ gridOnNow: false, proj: lasts, scheduledSoon: true, sunWh: 1000, needWh: 20000 }));
+  assert.equal(h1.text, "Батареї вистачить до завтрашнього ранку.");
+  assert.match(h1.detail!, /^Найменше буде близько \d+% о 18:00\. Сьогодні сонця мало\.$/);
   assert.equal(h1.tone, "ok");
 
   const bad = project(base({ gridOnNow: false, soc: 30, recentLoadW: 2000, outages: [{ start: NOW - HOUR, end: NOW + 6 * HOUR }] }));
   const h2 = headline(hin({ gridOnNow: false, proj: bad, scheduledSoon: true }));
-  assert.match(h2.text, /^Батарея сяде близько \d\d:\d\d, за .+ до повернення світла\. Зменште споживання на \d+ Вт, щоб дотягнути\.$/);
+  assert.match(h2.text, /^Батарея сяде близько \d\d:\d\d\. Зменште споживання на \d+ Вт\.$/);
+  assert.equal(h2.detail, "Світло повернеться о 18:00.");
   assert.equal(h2.tone, "bad");
 
-  const charge = project(base({ outages: [{ start: NOW + 8 * HOUR, end: NOW + 12 * HOUR }] }));
-  const h3 = headline(hin({ proj: charge, scheduledSoon: true }));
-  assert.equal(h3.text, "Зарядиться до 100% до наступного відключення о 20:00.");
-
+  // Grid on, an outage later: the same verdict, the lowest point is the end of the outage.
   const full = project(base({ soc: 100, outages: [{ start: NOW + 8 * HOUR, end: NOW + 12 * HOUR }] }));
-  const h3b = headline(hin({ proj: full, soc: 100, scheduledSoon: true }));
-  assert.equal(h3b.text, "Батарея повна. Відключення о 20:00 витримає.");
-  assert.match(h3b.detail!, /^Світло повернеться завтра о 00:00, залишиться \d+%\.$/);
+  const h3 = headline(hin({ proj: full, soc: 100, scheduledSoon: true }));
+  assert.equal(h3.text, "Батареї вистачить до завтрашнього ранку.");
+  assert.match(h3.detail!, /^Найменше буде близько \d+% завтра о 00:00\.$/);
+
+  // The current outage lasts, the evening one does not.
+  const outs = [{ start: NOW - HOUR, end: NOW + 4 * HOUR }, { start: NOW + 5.5 * HOUR, end: NOW + 11.5 * HOUR }];
+  const h6 = headline(hin({ gridOnNow: false, proj: project(base({ gridOnNow: false, soc: 99, recentLoadW: 2500, chargeW: 500, outages: outs })), scheduledSoon: true }));
+  assert.equal(h6.tone, "warn");
+  assert.match(h6.text, /^Батарея сяде близько \d\d:\d\d\. Зменште споживання на \d+ Вт під час відключення\.$/);
 
   const none = project(base({ confidence: "history" }));
   const h4 = headline(hin({ proj: none, scheduleKnown: false, recentDrop: true }));
@@ -326,6 +343,32 @@ test("headline: sun modes", () => {
 test("fmtClock: today, tomorrow", () => {
   assert.equal(fmtClock(NOW + 6 * HOUR, NOW), "18:00");
   assert.equal(fmtClock(NOW + 16 * HOUR, NOW), "завтра 04:00");
+});
+
+test("switch-over tolerance: a few minutes late or early is still the scheduled outage", () => {
+  const MIN = 60_000;
+  // 5 min past the scheduled start, grid still on: the outage is still expected.
+  const late = project(base({ soc: 100, outages: [{ start: NOW - 5 * MIN, end: NOW + 6 * HOUR }] }));
+  assert.equal(late.outages.length, 1);
+  assert.equal(late.outages[0].overdue, true);
+  assert.equal(late.outages[0].start, NOW - 5 * MIN);
+  assert.equal(late.outages[0].in_progress, false);
+  assert.equal(headline(hin({ proj: late, soc: 100, scheduledSoon: true })).text, "Батареї вистачить до завтрашнього ранку.");
+  // 20 min past: reality wins, the outage is dropped.
+  assert.equal(project(base({ outages: [{ start: NOW - 20 * MIN, end: NOW + 6 * HOUR }] })).outages.length, 0);
+  // Off 5 min before the scheduled start: it is that outage, with its scheduled end.
+  const early = project(base({ gridOnNow: false, outages: [{ start: NOW + 5 * MIN, end: NOW + 6 * HOUR }] }));
+  assert.equal(early.outages.length, 1);
+  assert.equal(early.outages[0].in_progress, true);
+  assert.equal(early.outages[0].end, NOW + 6 * HOUR);
+  assert.equal(early.outages[0].end_guessed, undefined);
+  // Off outside the schedule: the end is a guess and the headline does not present it as a scheduled return.
+  const off = project(base({ gridOnNow: false, outages: [{ start: NOW + 8 * HOUR, end: NOW + 12 * HOUR }], unknownOutageEnd: NOW + 3 * HOUR }));
+  assert.equal(off.outages[0].end_guessed, true);
+  assert.match(headline(hin({ gridOnNow: false, proj: off, scheduledSoon: true })).text, /^Світла немає\./);
+  // Still off 5 min after the scheduled end.
+  const lr = headline(hin({ gridOnNow: false, proj: off, scheduledSoon: true, lateReturn: NOW - 5 * MIN }));
+  assert.match(lr.text, /^Світло мало повернутися о 11:55\. Перемикання може тривати до 10 хв\.$/);
 });
 
 // ---------- settings ----------

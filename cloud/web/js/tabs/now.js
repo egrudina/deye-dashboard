@@ -70,19 +70,24 @@ function renderNow() {
   const charging = s.batt_w < -30, discharging = s.batt_w > 30;
   let eta = null;
   if (discharging && b.empty_at) eta = `сяде близько ${f.when(b.empty_at, now)}`;
-  else if (charging && b.full_at && b.full_at > now) eta = `повна близько ${f.when(b.full_at, now)}`;
-  else if (s.soc >= 99) eta = "повна";
+  else if (charging && b.full_at && b.full_at > now) eta = `зарядиться повністю близько ${f.when(b.full_at, now)}`;
+  else if (s.soc >= 99 && !discharging) eta = "заряджена повністю";
+  // The ring's tick and the "→" line: where the charge will be when the grid returns (same number as in the headline).
+  const gh = d.ghost;
+  let ghostSub = "", ghostWhen = "";
+  if (gh && !(gh.kind === "horizon" && Math.round(gh.soc) === Math.round(s.soc))) {
+    ghostSub = `→ ${f.pct(gh.soc)}`;
+    ghostWhen = gh.kind === "horizon" ? "за 2 доби" : gh.guessed || !gh.at ? "орієнтовно" : `о ${f.when(gh.at, now)}`;
+  }
   const battCard = h("section.card",
     h("div.battery",
       ring,
       h("div",
         h("div.label", "Батарея"),
         h("div.big", charging ? `+${f.W(-s.batt_w)}` : discharging ? `−${f.W(s.batt_w)}` : "у спокої"),
-        h("div.sub", charging ? "заряджається" : discharging ? "віддає" : ""),
+        charging || discharging ? h("div.sub", charging ? "заряджається" : "розряджається") : null,
         eta ? h("div.sub", eta) : null,
-        b.runtime_h != null && !s.grid_on ? h("div.sub", `без сонця вистачить на ${f.duration(b.runtime_h * 3600e3)}`) : null,
-        d.ghost ? h("div.sub.muted", d.ghost.kind === "outage_end" && d.ghost.at
-          ? `після відключення: ~${f.pct(d.ghost.soc)}` : `за 48 год: ~${f.pct(d.ghost.soc)}`) : null,
+        b.runtime_h != null && !s.grid_on ? h("div.sub.muted", `без сонця і мережі: ≈${f.duration(b.runtime_h * 3600e3)}`) : null,
       ),
     ),
   );
@@ -132,7 +137,9 @@ function renderNow() {
   const g = d.grid ?? {};
   const since = d.grid_since ? `${s.grid_on ? "є" : "немає"} ${f.duration(now - d.grid_since.ts)}, з ${f.when(d.grid_since.ts, now)}` : "";
   const gridLines = [];
-  if (!s.grid_on && g.expected_return) gridLines.push(`повернення ${d.confidence === "schedule" ? "за графіком" : "орієнтовно"} ${f.when(g.expected_return, now)}`);
+  if (!s.grid_on && g.expected_return) gridLines.push(g.return_scheduled
+    ? `повернення за графіком ${f.when(g.expected_return, now)}`
+    : `повернення орієнтовно ${f.when(g.expected_return, now)}`);
   if (s.grid_on && g.next_outage) gridLines.push(`наступне відключення ${f.when(g.next_outage.start, now)}–${f.time(g.next_outage.end)}`);
   if (s.grid_on && !g.next_outage && d.schedule?.today?.status === "ScheduleApplies") gridLines.push("за графіком відключень більше немає");
   if (d.schedule?.today?.status === "EmergencyShutdowns") gridLines.push("екстрені відключення: графік не діє");
@@ -154,7 +161,7 @@ function renderNow() {
   ].filter(Boolean));
 
   dayStrip(strip, { now: Date.now(), outages: d.home_intervals ?? [], loud: showLoud ? d.generator : [] });
-  batteryRing(ring, { soc: s.soc, floor: b.floor_pct ?? 15, ghost: d.ghost, sub: d.ghost ? `→ ${f.pct(d.ghost.soc)}` : "" });
+  batteryRing(ring, { soc: s.soc, floor: b.floor_pct ?? 15, ghost: ghostSub ? gh : null, sub: ghostSub, sub2: ghostWhen });
   energyFlow(flow, s);
   phaseBars(bars, { a: s.load_a, b: s.load_b, c: s.load_c, names, main });
 }

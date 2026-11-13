@@ -30,7 +30,7 @@ function validSample(s: unknown): s is IngestSample {
   );
 }
 
-export async function ingest(request: Request, env: Env, transitions: GridTransition[] = []): Promise<Response> {
+export async function ingest(request: Request, env: Env, transitions: GridTransition[] = [], state: { lastGridOn: number | null } = { lastGridOn: null }): Promise<Response> {
   const received = Date.now();
   const len = Number(request.headers.get("content-length") ?? "NaN");
   if (!Number.isFinite(len) || len > MAX_BODY_BYTES) return json({ error: "content-length required, max 1 MB" }, 413);
@@ -85,6 +85,7 @@ export async function ingest(request: Request, env: Env, transitions: GridTransi
       }
       if (!last || last.ts < lo) last = { ts, grid_on: d.grid_on };
     }
+    state.lastGridOn = last?.grid_on ?? null;
   }
 
   if (body.heartbeat && typeof body.heartbeat === "object") {

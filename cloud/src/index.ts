@@ -3,7 +3,7 @@ import { HOUR_FIELDS, sumRows, type HourRow } from "./energy.ts";
 import { ingest, type GridTransition } from "./ingest.ts";
 import { calibrate, rollup, solcast, yasno, type JobStatus } from "./jobs.ts";
 import { onCron, onIngest, pushEndpoints } from "./notify.ts";
-import { analyse, loadContext, nowPayload, outageDurations, planPayload, sharedConfig } from "./summary.ts";
+import { analyse, dropBlips, loadContext, nowPayload, outageDurations, planPayload, sharedConfig } from "./summary.ts";
 import { haPayload } from "./ha.ts";
 import { getAllConfig, getUserSettings, putUserSettings, sharedPatch } from "./settings.ts";
 import { DAY, HOUR, kyivDate, kyivTime, addDays } from "./time.ts";
@@ -30,9 +30,10 @@ export default {
       if (request.method !== "POST") return json({ error: "method" }, 405);
       if (!(await checkBearer(request, env.PUSH_KEY))) return json({ error: "unauthorized" }, 401);
       const transitions: GridTransition[] = [];
-      const res = await ingest(request, env, transitions);
+      const state: { lastGridOn: number | null } = { lastGridOn: null };
+      const res = await ingest(request, env, transitions, state);
       // Notifications must never slow down or fail the ingest answer.
-      if (transitions.length) ctx.waitUntil(onIngest(env, transitions).catch((e) => log("warn", "push on ingest failed", { error: String(e) })));
+      if (transitions.length || state.lastGridOn === 0) ctx.waitUntil(onIngest(env, transitions, state.lastGridOn === 0).catch((e) => log("warn", "push on ingest failed", { error: String(e) })));
       return res;
     }
 
@@ -215,9 +216,9 @@ async function apiOutages(env: Env, url: URL) {
   return { from, to, outages: outagesFromEvents(results).filter((o) => (o.end ?? Infinity) >= from).reverse() };
 }
 
-function outagesFromEvents(events: { ts: number; grid_on: number; prev_ts: number }[]) {
+function outagesFromEvents(all: { ts: number; grid_on: number; prev_ts: number }[]) {
   const outages: { start: number; start_after: number; end: number | null; end_after: number | null }[] = [];
-  for (const e of events) {
+  for (const e of dropBlips(all)) {
     if (e.grid_on === 0) {
       // Grid went off somewhere in (prev_ts, ts].
       outages.push({ start: e.ts, start_after: e.prev_ts, end: null, end_after: null });
@@ -304,7 +305,7 @@ async function apiOutageLog(env: Env, url: URL) {
     changes: (changes.results as { ts: number; role: string; date: string; before: string | null; after: string }[]).map((c) => ({
       ...c, before: c.before ? JSON.parse(c.before) : null, after: JSON.parse(c.after),
     })),
-    durations_ms: outageDurations(events.results as { ts: number; grid_on: number }[]),
+    durations_ms: outageDurations(dropBlips(events.results as { ts: number; grid_on: number }[])),
   };
 }
 

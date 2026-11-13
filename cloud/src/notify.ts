@@ -5,7 +5,7 @@ import { fmtClock, fmtHours } from "./headline.ts";
 import type { GridTransition } from "./ingest.ts";
 import type { ScheduleChange } from "./jobs.ts";
 import { DEFAULT_SETTINGS, mergeSettings, type NotifyType, type UserSettings } from "./settings.ts";
-import { analyse, loadContext } from "./summary.ts";
+import { BLIP_MS, analyse, loadContext } from "./summary.ts";
 import { kyivDate, kyivMinuteOfDay, addDays } from "./time.ts";
 import { sendPush, type VapidKeys } from "./webpush.ts";
 
@@ -84,27 +84,32 @@ async function afterSend(env: Env, endpoint: string, status: number, now: number
 
 // ---------- triggers ----------
 
-/** Grid off/on, from ingest (via waitUntil). */
-export async function onIngest(env: Env, transitions: GridTransition[]): Promise<void> {
+/**
+ * Grid off/on, from ingest (via waitUntil). A flicker shorter than BLIP_MS sends nothing: "off" is sent
+ * only once the grid has stayed off that long (`gridOff` = the newest sample is off), and "on" only
+ * after a real outage.
+ */
+export async function onIngest(env: Env, transitions: GridTransition[], gridOff = false): Promise<void> {
   const now = Date.now();
+  if (gridOff) {
+    const ev = await env.DB.prepare("SELECT ts, grid_on FROM grid_events ORDER BY ts DESC LIMIT 1").first<{ ts: number; grid_on: number }>();
+    if (ev && ev.grid_on === 0 && now - ev.ts >= BLIP_MS && now - ev.ts <= BLIP_MS + 10 * 60_000) {
+      const ctx = await loadContext(env, now);
+      const soc = ctx.sample?.soc;
+      await notify(env, "grid", `grid:${ev.ts}`, { title: "Світло зникло", body: `${soc != null ? `Батарея ${soc}%. ` : ""}${analyse(ctx).headline.text}`, tag: "grid" }, now);
+    }
+  }
   for (const t of transitions) {
-    if (now - t.ts > 30 * 60_000) continue; // a late batch from the Pi: too old to be useful
+    if (t.grid_on !== 1 || now - t.ts > 30 * 60_000) continue; // a late batch from the Pi: too old to be useful
     // The stored event (a resent batch has a slightly different ts) is the dedup key.
-    const ev = await env.DB.prepare("SELECT ts, grid_on, prev_ts FROM grid_events WHERE ts BETWEEN ? AND ? LIMIT 1")
+    const ev = await env.DB.prepare("SELECT ts, grid_on, prev_ts FROM grid_events WHERE ts BETWEEN ? AND ? AND grid_on = 1 LIMIT 1")
       .bind(t.ts - 10_000, t.ts + 10_000).first<{ ts: number; grid_on: number; prev_ts: number }>();
     if (!ev) continue;
-    const ctx = await loadContext(env, now);
-    const a = analyse(ctx);
-    const soc = ctx.sample?.soc;
-    let msg: Message;
-    if (ev.grid_on === 0) {
-      msg = { title: "Світло зникло", body: `${soc != null ? `Батарея ${soc}%. ` : ""}${a.headline.text}`, tag: "grid" };
-    } else {
-      const prevOff = await env.DB.prepare("SELECT ts FROM grid_events WHERE ts < ? AND grid_on = 0 ORDER BY ts DESC LIMIT 1").bind(ev.ts).first<{ ts: number }>();
-      const dur = prevOff ? `Не було ${fmtHours(ev.ts - prevOff.ts)}. ` : "";
-      msg = { title: "Світло з'явилося", body: `${dur}${soc != null ? `Батарея ${soc}%.` : ""}`, tag: "grid" };
-    }
-    await notify(env, "grid", `grid:${ev.ts}`, msg, now);
+    const prevOff = await env.DB.prepare("SELECT ts FROM grid_events WHERE ts < ? AND grid_on = 0 ORDER BY ts DESC LIMIT 1").bind(ev.ts).first<{ ts: number }>();
+    if (prevOff && ev.ts - prevOff.ts < BLIP_MS) continue; // a flicker, not an outage
+    const soc = (await loadContext(env, now)).sample?.soc;
+    const dur = prevOff ? `Не було ${fmtHours(ev.ts - prevOff.ts)}. ` : "";
+    await notify(env, "grid", `grid:${ev.ts}`, { title: "Світло з'явилося", body: `${dur}${soc != null ? `Батарея ${soc}%.` : ""}`, tag: "grid" }, now);
   }
 }
 
@@ -160,7 +165,7 @@ export async function onCron(env: Env, now: number, changes: ScheduleChange[]): 
       const o = p?.outages.find((x) => Math.abs(x.start - soon.start) < 31 * 60_000);
       add("outage_soon", await notify(env, "outage_soon", `soon:${soon.start}`, {
         title: `Відключення о ${fmtClock(soon.start, now)}`,
-        body: `До ${fmtClock(soon.end, now)}. Батарея ${s.soc}%${o ? `, після відключення ~${Math.round(o.soc_end_low)}%` : ""}.`,
+        body: `До ${fmtClock(soon.end, now)}. Батарея ${s.soc}%${o ? `, на ${fmtClock(soon.end, now)} залишиться близько ${Math.round(o.soc_end_low)}%` : ""}.`,
         tag: "outage_soon",
       }, now));
     }

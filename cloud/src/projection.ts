@@ -36,6 +36,10 @@ export interface ProjOutage {
   empty_at: number | null;     // pessimistic time the floor is reached during this outage
   cut_w: number | null;        // load cut (W) that makes it last; null when it already lasts or no cut helps
   in_progress: boolean;
+  load_wh: number;             // expected house use during the outage (from now when in progress)
+  pv_wh: number;               // sun during the outage, pessimistic scenario
+  end_guessed?: boolean;       // off outside the schedule: the end is an assumption, not a scheduled time
+  overdue?: boolean;           // the schedule says it has started, the grid is still on (within SWITCH_GRACE_MS)
 }
 
 export interface Projection {
@@ -51,24 +55,38 @@ export interface Projection {
 
 const EFF = 0.95;              // battery round trip losses, split between charge and discharge
 const MAX_CUT_W = 4000;
+/** Yasno: switching on or off can take a few minutes after the scheduled time. */
+export const SWITCH_GRACE_MS = 10 * 60_000;
 
 interface SimResult { soc: number[]; grid: boolean[]; load: number[]; pv: number[]; emptyAt: number | null; fullAt: number | null }
 
-function gridPlan(inp: ProjectionInput, times: number[], ends: number[]): boolean[] {
+function gridPlan(inp: ProjectionInput, times: number[], ends: number[]): { grid: boolean[]; overdue: Interval | null; guessed: boolean } {
   const { now, outages, gridOnNow } = inp;
   const covering = outages.find((o) => o.start <= now && o.end > now);
   let list = outages;
+  let overdue: Interval | null = null;
+  let guessed = false;
   if (gridOnNow && covering) {
-    // Reality wins: the scheduled outage did not start (yet). Assume the grid stays on for this slot.
-    list = outages.filter((o) => o !== covering);
+    if (now - covering.start <= SWITCH_GRACE_MS && covering.end > ends[0]) {
+      // Just past the scheduled start: the switch-off is still expected. Model it from the next step.
+      overdue = covering;
+      list = outages.map((o) => (o === covering ? { start: ends[0], end: o.end } : o));
+    } else {
+      // Reality wins: the scheduled outage did not start. Assume the grid stays on for this slot.
+      list = outages.filter((o) => o !== covering);
+    }
   } else if (!gridOnNow && !covering) {
-    list = [...outages, { start: now, end: inp.unknownOutageEnd ?? now + 4 * HOUR }];
+    const early = outages.find((o) => o.start > now && o.start - now <= SWITCH_GRACE_MS);
+    // Switched off a few minutes before the scheduled start: it is that outage.
+    if (early) list = outages.map((o) => (o === early ? { start: now, end: o.end } : o));
+    else { guessed = true; list = [...outages, { start: now, end: inp.unknownOutageEnd ?? now + 4 * HOUR }]; }
   }
-  return times.map((t, i) => {
+  const grid = times.map((t, i) => {
     if (i === 0 && !list.some((o) => o.start <= now && o.end > now)) return gridOnNow;
     const mid = (t + ends[i]) / 2;
     return !list.some((o) => o.start <= mid && o.end > mid);
   });
+  return { grid, overdue, guessed };
 }
 
 function loadAt(inp: ProjectionInput, t: number): number {
@@ -122,7 +140,7 @@ export function project(inp: ProjectionInput): Projection {
     times.push(t);
   }
   const ends = times.map((t, i) => times[i + 1] ?? Math.max(t + 60_000, inp.now + horizon));
-  const grid = gridPlan(inp, times, ends);
+  const { grid, overdue, guessed } = gridPlan(inp, times, ends);
   const mid = simulate(inp, times, ends, grid, "p50", null, 0);
   const low = simulate(inp, times, ends, grid, "p10", null, 0);
 
@@ -151,9 +169,17 @@ export function project(inp: ProjectionInput): Projection {
     const lasts = emptyLow == null;
     let cutW: number | null = null;
     if (!lasts) cutW = findCut(inp, times, ends, grid, { start, end: end ?? Infinity }, i, j);
+    let loadWh = 0, pvWh = 0;
+    for (let k = i; k < j; k++) {
+      const dtH = (ends[k] - times[k]) / HOUR;
+      loadWh += low.load[k] * dtH; pvWh += low.pv[k] * dtH;
+    }
+    const isOverdue = overdue != null && i === 1;
     outages.push({
-      start: i === 0 && !inp.gridOnNow ? inp.now : start, end, soc_start: socStart, soc_end: mid.soc[j - 1], soc_end_low: socEndLow,
+      start: isOverdue ? overdue.start : i === 0 && !inp.gridOnNow ? inp.now : start,
+      end, soc_start: socStart, soc_end: mid.soc[j - 1], soc_end_low: socEndLow,
       lasts, empty_at: emptyLow, cut_w: cutW, in_progress: i === 0 && !grid[0],
+      load_wh: loadWh, pv_wh: pvWh, ...(isOverdue ? { overdue: true } : {}), ...(guessed && i === 0 ? { end_guessed: true } : {}),
     });
   }
 
@@ -198,9 +224,10 @@ export function median(xs: number[]): number | null {
 
 /**
  * Typical load per Kyiv hour from hourly rows (hour_ts, load_wh, covered_s). Rows covering < 80% of the
- * hour are skipped. Hours without data are filled from the overall median.
+ * hour are skipped. Hours without data are filled from the overall median. An hour seen on fewer than
+ * `minDays` days is pulled towards the overall median, so one unusual day does not set the forecast.
  */
-export function loadProfile(rows: { hour_ts: number; load_wh: number; covered_s: number }[]): number[] | null {
+export function loadProfile(rows: { hour_ts: number; load_wh: number; covered_s: number }[], minDays = 3): number[] | null {
   const byHour: number[][] = Array.from({ length: 24 }, () => []);
   for (const r of rows) {
     if (r.covered_s < 0.8 * 3600) continue;
@@ -209,7 +236,11 @@ export function loadProfile(rows: { hour_ts: number; load_wh: number; covered_s:
   const all = byHour.flat();
   const overall = median(all);
   if (overall == null) return null;
-  return byHour.map((xs) => median(xs) ?? overall);
+  return byHour.map((xs) => {
+    if (!xs.length) return overall;
+    if (xs.length >= minDays) return median(xs)!;
+    return (xs.reduce((a, b) => a + b, 0) + (minDays - xs.length) * overall) / minDays;
+  });
 }
 
 /** Typical outage length from past outages (ms); null when there are none. */
