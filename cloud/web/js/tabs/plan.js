@@ -136,7 +136,7 @@ function eventsList(d, now, showNeighbour) {
       ? `Відключення триває до ${o.end ? f.when(o.end, now) : "невідомо"}: ${f.pct(o.soc_start)} → ${f.pct(o.soc_end_low)}`
       : `Відключення до ${end}: заряд ${f.pct(o.soc_start)} → ${f.pct(o.soc_end_low)}`;
     const tag = o.lasts ? null : h("span.tag.bad", o.cut_w ? `не вистачить, −${o.cut_w} Вт` : "не вистачить");
-    ev.push({ t: o.in_progress ? now : o.start, text: [what, tag] });
+    ev.push({ t: o.in_progress ? now : o.start, now: !!o.in_progress, text: [what, tag] });
     if (!o.lasts && o.empty_at) ev.push({ t: o.empty_at, text: [`Батарея може сісти (до ${d.floor_pct}%)`] });
   }
   if (p?.full_at && p.full_at > now) ev.push({ t: p.full_at, text: ["Батарея повна (100%)"] });
@@ -153,9 +153,15 @@ function eventsList(d, now, showNeighbour) {
     if (t < now - 12 * 3600e3) continue;
     ev.push({ t: Math.max(t - 12 * 3600e3 + 1, now - 1), day: true, text: [h("span.muted", `${f.dateKey(now) === k ? "Сьогодні" : f.weekday(t)}: сонце ~${f.kWh(wh)}`)] });
   }
-  ev.sort((a, b) => a.t - b.t);
+  // A "now" row anchors the list, so it is clear which lines are past, current and coming.
+  const p0 = p?.points?.[0];
+  if (!ev.some((e) => e.now) && p0) {
+    ev.push({ t: now, now: true, text: [`Заряд ${f.pct(p0.soc)}, ${p0.grid_on ? "мережа є" : "мережі немає"}`] });
+  }
+  ev.sort((a, b) => a.t - b.t || (a.day ? -1 : 0) - (b.day ? -1 : 0));
   if (!ev.length) return h("p.muted", "Нічого особливого: відключень за графіком немає.");
-  return h("ul.list", ev.map((e) => h("li", h("span.when", e.day ? "" : f.when(e.t, now)), h("span.what", ...e.text))));
+  return h("ul.list.events", ev.map((e) => h(e.now ? "li.now" : "li",
+    h("span.when", e.now ? "зараз" : e.day ? "" : f.when(e.t, now)), h("span.what", ...e.text))));
 }
 
 function scheduleCard(d, now) {
