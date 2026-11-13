@@ -1,3 +1,10 @@
 # Copy to .dev.vars for `wrangler dev` (gitignored).
 PUSH_KEY=local-test-key
 DEV_NO_AUTH=1
+# Empty locally: Solcast is mocked by test/seed-local.mjs (never spend real calls on tests).
+SOLCAST_API_KEY=
+SOLCAST_RESOURCE_ID=
+# Web Push (generate with: node test/gen-vapid.mjs)
+VAPID_PUBLIC_KEY=
+VAPID_PRIVATE_KEY=
+VAPID_SUBJECT=mailto:admin@example.com

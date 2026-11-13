@@ -1,10 +1,12 @@
 import { checkBearer, verifyAccess } from "./auth";
-import { DECODED_COLUMNS, REG_COUNT, REG_START, decode } from "./decode";
+import { HOUR_FIELDS, sumRows, type HourRow } from "./energy.ts";
+import { ingest, type GridTransition } from "./ingest.ts";
+import { calibrate, rollup, solcast, yasno, type JobStatus } from "./jobs.ts";
+import { onCron, onIngest, pushEndpoints } from "./notify.ts";
+import { analyse, loadContext, nowPayload, outageDurations, planPayload, sharedConfig } from "./summary.ts";
+import { getAllConfig, getUserSettings, putUserSettings, sharedPatch } from "./settings.ts";
+import { DAY, HOUR, kyivDate, kyivTime, addDays } from "./time.ts";
 
-const MAX_BODY_BYTES = 1_000_000;
-const MAX_SAMPLES_PER_POST = 500;
-const MAX_AGE_MS = 7 * 24 * 3600 * 1000;
-const DEDUP_WINDOW_MS = 10_000; // samples are 30 s apart; a resent batch lands within a few seconds
 const RAW_KEEP_MS = 7 * 24 * 3600 * 1000;
 const MAX_POINTS = 1500;
 
@@ -17,6 +19,8 @@ const json = (data: unknown, status = 200, headers: HeadersInit = {}) =>
 const log = (level: "info" | "warn" | "error", msg: string, extra: Record<string, unknown> = {}) =>
   console[level](JSON.stringify({ msg, ...extra }));
 
+export class BadRequest extends Error {}
+
 export default {
   async fetch(request, env, ctx): Promise<Response> {
     const url = new URL(request.url);
@@ -24,23 +28,50 @@ export default {
     if (url.pathname === "/api/ingest") {
       if (request.method !== "POST") return json({ error: "method" }, 405);
       if (!(await checkBearer(request, env.PUSH_KEY))) return json({ error: "unauthorized" }, 401);
-      return ingest(request, env);
+      const transitions: GridTransition[] = [];
+      const res = await ingest(request, env, transitions);
+      // Notifications must never slow down or fail the ingest answer.
+      if (transitions.length) ctx.waitUntil(onIngest(env, transitions).catch((e) => log("warn", "push on ingest failed", { error: String(e) })));
+      return res;
     }
 
     // Everything else: only for users that passed Cloudflare Access.
+    let email = "dev@local";
     if (!env.DEV_NO_AUTH) {
       if (!env.ACCESS_TEAM_DOMAIN || !env.ACCESS_AUD) return new Response("Access not configured", { status: 503 });
-      const email = await verifyAccess(request, env.ACCESS_TEAM_DOMAIN, env.ACCESS_AUD);
-      if (!email) return new Response("Forbidden", { status: 403 });
+      const e = await verifyAccess(request, env.ACCESS_TEAM_DOMAIN, env.ACCESS_AUD);
+      if (!e) return new Response("Forbidden", { status: 403 });
+      email = e.toLowerCase();
     }
 
     if (url.pathname.startsWith("/api/")) {
-      if (request.method !== "GET") return json({ error: "method" }, 405);
       try {
+        if (request.method !== "GET") {
+          // Writes: JSON only (forces a CORS preflight from other origins) and same origin when the browser says so.
+          const origin = request.headers.get("origin");
+          if (origin && origin !== url.origin) return json({ error: "origin" }, 403);
+          if (!(request.headers.get("content-type") ?? "").startsWith("application/json")) return json({ error: "json only" }, 415);
+          return await write(request, env, url, email, ctx);
+        }
         switch (url.pathname) {
-          case "/api/now": return json(await apiNow(env));
+          case "/api/now": {
+            const c = await loadContext(env);
+            return json(nowPayload(c, analyse(c)));
+          }
+          case "/api/plan": {
+            const c = await loadContext(env);
+            return json(planPayload(c, analyse(c)));
+          }
+          case "/api/me": {
+            const [settings, config] = await Promise.all([getUserSettings(env.DB, email), getAllConfig(env.DB)]);
+            return json({ email, settings, shared: sharedConfig(config), vapid_public: env.VAPID_PUBLIC_KEY ?? null });
+          }
           case "/api/series": return json(await apiSeries(env, url));
           case "/api/outages": return json(await apiOutages(env, url));
+          case "/api/hourly": return json(await apiHourly(env, url));
+          case "/api/daily": return json(await apiDaily(env, url));
+          case "/api/outage-log": return json(await apiOutageLog(env, url));
+          case "/api/forecast-actual": return json(await apiForecastActual(env, url));
           case "/api/health": return json(await apiHealth(env));
         }
       } catch (e) {
@@ -54,138 +85,86 @@ export default {
     return env.ASSETS.fetch(request);
   },
 
-  async scheduled(_controller, env, _ctx): Promise<void> {
-    const cutoff = Date.now() - RAW_KEEP_MS;
-    const res = await env.DB.batch([
-      env.DB.prepare("DELETE FROM raw_samples WHERE ts < ?").bind(cutoff),
-      // Keep at least the latest heartbeat even if it is old.
-      env.DB.prepare(
-        "DELETE FROM heartbeats WHERE received_at < ? AND received_at < (SELECT MAX(received_at) FROM heartbeats)",
-      ).bind(cutoff),
-    ]);
-    log("info", "purge", { raw: res[0].meta.changes, heartbeats: res[1].meta.changes });
+  async scheduled(controller, env, ctx): Promise<void> {
+    const now = Date.now();
+    const run = async (name: string, f: () => Promise<unknown>) => {
+      try {
+        const r = await f();
+        log("info", `cron ${name}`, { result: r ?? null });
+        return r;
+      } catch (e) {
+        log("error", `cron ${name} failed`, { error: String(e) });
+        return undefined;
+      }
+    };
+    if (controller.cron === "17 * * * *") {
+      await run("purge", () => purge(env));
+      await run("calibrate", () => calibrate(env, now));
+      return;
+    }
+    // Every 15 minutes.
+    await run("rollup", () => rollup(env, now));
+    const changes = await run("yasno", () => yasno(env, now));
+    await run("solcast", () => solcast(env, now));
+    await run("notify", () => onCron(env, now, Array.isArray(changes) ? changes : []));
+    void ctx;
   },
 } satisfies ExportedHandler<Env>;
 
-class BadRequest extends Error {}
-
-// ---------- ingest ----------
-
-interface IngestSample { age_ms: number; start: number; regs: number[] }
-interface IngestBody { v: number; pi_wall_ms?: number; samples?: IngestSample[]; heartbeat?: Record<string, unknown> }
-
-function validSample(s: unknown): s is IngestSample {
-  if (!s || typeof s !== "object") return false;
-  const o = s as Record<string, unknown>;
-  return (
-    Number.isInteger(o.age_ms) && (o.age_ms as number) >= 0 && (o.age_ms as number) <= MAX_AGE_MS &&
-    o.start === REG_START &&
-    Array.isArray(o.regs) && o.regs.length === REG_COUNT &&
-    o.regs.every((r) => Number.isInteger(r) && r >= 0 && r <= 0xffff)
-  );
+async function purge(env: Env) {
+  const cutoff = Date.now() - RAW_KEEP_MS;
+  const res = await env.DB.batch([
+    env.DB.prepare("DELETE FROM raw_samples WHERE ts < ?").bind(cutoff),
+    // Keep at least the latest heartbeat even if it is old.
+    env.DB.prepare(
+      "DELETE FROM heartbeats WHERE received_at < ? AND received_at < (SELECT MAX(received_at) FROM heartbeats)",
+    ).bind(cutoff),
+    env.DB.prepare("DELETE FROM notifications_sent WHERE ts < ?").bind(Date.now() - 30 * DAY),
+  ]);
+  return { raw: res[0].meta.changes, heartbeats: res[1].meta.changes, notifications: res[2].meta.changes };
 }
 
-async function ingest(request: Request, env: Env): Promise<Response> {
-  const received = Date.now();
-  const len = Number(request.headers.get("content-length") ?? "NaN");
-  if (!Number.isFinite(len) || len > MAX_BODY_BYTES) return json({ error: "content-length required, max 1 MB" }, 413);
+// ---------- writes ----------
 
-  let body: IngestBody;
-  try {
-    body = JSON.parse(await request.text()) as IngestBody;
-  } catch {
-    return json({ error: "bad json" }, 400);
-  }
-  if (body?.v !== 1) return json({ error: "unsupported version" }, 400);
-  const samples = body.samples ?? [];
-  if (!Array.isArray(samples) || samples.length > MAX_SAMPLES_PER_POST) return json({ error: "bad samples" }, 400);
+async function readBody(request: Request): Promise<unknown> {
+  const text = await request.text();
+  if (text.length > 20_000) throw new BadRequest("too large");
+  try { return JSON.parse(text || "{}"); } catch { throw new BadRequest("bad json"); }
+}
 
-  // Bad samples are skipped, not fatal: the Pi must never get stuck resending a batch.
-  const good = samples.filter(validSample).map((s) => ({ ts: received - s.age_ms, s }));
-  const rejected = samples.length - good.length;
-  good.sort((a, b) => a.ts - b.ts);
-
-  const stmts: D1PreparedStatement[] = [];
-
-  // Grid transitions: compare each sample with the previous one (the latest stored sample before the batch).
-  if (good.length) {
-    const prev = await env.DB.prepare("SELECT ts, grid_on FROM samples WHERE ts < ? ORDER BY ts DESC LIMIT 1")
-      .bind(good[0].ts - DEDUP_WINDOW_MS)
-      .first<{ ts: number; grid_on: number }>();
-    let last = prev ?? null;
-
-    const cols = DECODED_COLUMNS.join(", ");
-    const qs = DECODED_COLUMNS.map(() => "?").join(", ");
-    const insertSample = env.DB.prepare(
-      `INSERT INTO samples (ts, ${cols}) SELECT ?, ${qs}
-       WHERE NOT EXISTS (SELECT 1 FROM samples WHERE ts BETWEEN ? AND ?)`,
-    );
-    const insertRaw = env.DB.prepare(
-      `INSERT INTO raw_samples (ts, start, regs) SELECT ?, ?, ?
-       WHERE NOT EXISTS (SELECT 1 FROM raw_samples WHERE ts BETWEEN ? AND ?)`,
-    );
-    const insertEvent = env.DB.prepare(
-      `INSERT INTO grid_events (ts, grid_on, prev_ts) SELECT ?, ?, ?
-       WHERE NOT EXISTS (SELECT 1 FROM grid_events WHERE ts BETWEEN ? AND ?)`,
-    );
-
-    for (const { ts, s } of good) {
-      const d = decode(s.start, s.regs);
-      const lo = ts - DEDUP_WINDOW_MS, hi = ts + DEDUP_WINDOW_MS;
-      stmts.push(insertSample.bind(ts, ...DECODED_COLUMNS.map((c) => d[c]), lo, hi));
-      stmts.push(insertRaw.bind(ts, s.start, JSON.stringify(s.regs), lo, hi));
-      if (last && last.ts < lo && last.grid_on !== d.grid_on) {
-        stmts.push(insertEvent.bind(ts, d.grid_on, last.ts, lo, hi));
+async function write(request: Request, env: Env, url: URL, email: string, ctx: ExecutionContext): Promise<Response> {
+  const body = await readBody(request);
+  switch (`${request.method} ${url.pathname}`) {
+    case "PUT /api/settings":
+      return json({ settings: await putUserSettings(env.DB, email, body) });
+    case "PUT /api/shared": {
+      let stmts;
+      try { stmts = await sharedPatch(env.DB, body); } catch (e) { throw new BadRequest(String((e as Error).message)); }
+      if (stmts.length) await env.DB.batch(stmts);
+      // A new address: resolve it and fetch its schedule right away.
+      const b = body as Record<string, unknown>;
+      if (b.addr_home !== undefined || b.addr_neighbour !== undefined) {
+        ctx.waitUntil(yasno(env).catch((e) => log("warn", "yasno after address change", { error: String(e) })));
       }
-      if (!last || last.ts < lo) last = { ts, grid_on: d.grid_on };
+      return json({ shared: sharedConfig(await getAllConfig(env.DB)) });
+    }
+    case "POST /api/run": {
+      // Manual job run from the System tab (Solcast obeys its budget unless forced, and never goes over 9 calls).
+      const job = (body as { job?: string }).job;
+      const r = job === "rollup" ? await rollup(env)
+        : job === "yasno" ? await yasno(env)
+        : job === "solcast" ? await solcast(env, Date.now(), !!(body as { force?: boolean }).force)
+        : job === "calibrate" ? await calibrate(env)
+        : (() => { throw new BadRequest("unknown job"); })();
+      return json({ ok: true, result: r ?? null });
     }
   }
-
-  if (body.heartbeat && typeof body.heartbeat === "object") {
-    stmts.push(
-      env.DB.prepare("INSERT OR REPLACE INTO heartbeats (received_at, pi_wall_ms, json) VALUES (?, ?, ?)")
-        .bind(received, Number.isFinite(body.pi_wall_ms) ? body.pi_wall_ms : null, JSON.stringify(body.heartbeat).slice(0, 4000)),
-    );
-  }
-
-  let inserted = 0;
-  if (stmts.length) {
-    const results = await env.DB.batch(stmts);
-    // Every first statement of a sample pair is the samples insert.
-    for (let i = 0; i < good.length; i++) inserted += results[i * 2]?.meta.changes ?? 0;
-  }
-  if (rejected) log("warn", "ingest rejected samples", { rejected });
-  return json({ ok: true, inserted, duplicates: good.length - inserted, rejected });
+  const push = await pushEndpoints(request, env, url, email, body);
+  if (push) return push;
+  return json({ error: "not found" }, 404);
 }
 
 // ---------- read API ----------
-
-async function apiNow(env: Env) {
-  const [latest, lastEvent, hb] = await env.DB.batch([
-    env.DB.prepare("SELECT * FROM samples ORDER BY ts DESC LIMIT 1"),
-    env.DB.prepare("SELECT ts, grid_on, prev_ts FROM grid_events ORDER BY ts DESC LIMIT 1"),
-    env.DB.prepare("SELECT received_at, json FROM heartbeats ORDER BY received_at DESC LIMIT 1"),
-  ]);
-  const sample = (latest.results[0] as Record<string, number> | undefined) ?? null;
-  const event = (lastEvent.results[0] as { ts: number; grid_on: number; prev_ts: number } | undefined) ?? null;
-  const heartbeat = parseHeartbeat(hb.results[0] as { received_at: number; json: string } | undefined);
-  return {
-    server_ms: Date.now(),
-    sample,
-    // Grid state has been the same since this event (if it matches the current state).
-    grid_since: event && sample && event.grid_on === sample.grid_on ? { ts: event.ts, prev_ts: event.prev_ts } : null,
-    heartbeat,
-  };
-}
-
-function parseHeartbeat(row: { received_at: number; json: string } | undefined) {
-  if (!row) return null;
-  try {
-    return { received_at: row.received_at, ...(JSON.parse(row.json) as Record<string, unknown>) };
-  } catch {
-    return { received_at: row.received_at };
-  }
-}
 
 function rangeParams(url: URL, defaultSpanMs: number) {
   const now = Date.now();
@@ -211,7 +190,8 @@ async function apiSeries(env: Env, url: URL) {
             AVG(grid_on) AS grid_on,
             AVG(soc) AS soc, AVG(batt_w) AS batt_w,
             AVG(load_total) AS load_total, AVG(load_a) AS load_a, AVG(load_b) AS load_b, AVG(load_c) AS load_c,
-            AVG(pv_w) AS pv_w, AVG(grid_w) AS grid_w, AVG(ext_ct_w) AS ext_ct_w
+            AVG(pv_w) AS pv_w, AVG(grid_w) AS grid_w, AVG(ext_ct_w) AS ext_ct_w,
+            AVG(grid_v_a) AS grid_v_a, AVG(grid_v_b) AS grid_v_b, AVG(grid_v_c) AS grid_v_c, AVG(grid_hz) AS grid_hz
      FROM samples WHERE ts >= ?2 AND ts < ?3
      GROUP BY t ORDER BY t`,
   ).bind(step, from, to).all();
@@ -226,9 +206,12 @@ async function apiOutages(env: Env, url: URL) {
      WHERE ts >= COALESCE((SELECT MAX(ts) FROM grid_events WHERE ts < ?1), ?1) AND ts < ?2
      ORDER BY ts`,
   ).bind(from, to).all<{ ts: number; grid_on: number; prev_ts: number }>();
+  return { from, to, outages: outagesFromEvents(results).filter((o) => (o.end ?? Infinity) >= from).reverse() };
+}
 
+function outagesFromEvents(events: { ts: number; grid_on: number; prev_ts: number }[]) {
   const outages: { start: number; start_after: number; end: number | null; end_after: number | null }[] = [];
-  for (const e of results) {
+  for (const e of events) {
     if (e.grid_on === 0) {
       // Grid went off somewhere in (prev_ts, ts].
       outages.push({ start: e.ts, start_after: e.prev_ts, end: null, end_after: null });
@@ -239,19 +222,135 @@ async function apiOutages(env: Env, url: URL) {
       o.end_after = e.prev_ts;
     }
   }
-  return { from, to, outages: outages.filter((o) => (o.end ?? Infinity) >= from).reverse() };
+  return outages;
+}
+
+async function apiHourly(env: Env, url: URL) {
+  const { from, to } = rangeParams(url, DAY);
+  const { results } = await env.DB.prepare("SELECT * FROM hourly WHERE hour_ts >= ? AND hour_ts < ? ORDER BY hour_ts").bind(from, to).all();
+  return { from, to, hours: results };
+}
+
+/** Per Kyiv day sums from the hourly rollups. ?days=N (default 30) ending today. */
+async function apiDaily(env: Env, url: URL) {
+  const n = Math.min(400, Math.max(1, Number(url.searchParams.get("days") ?? 30) || 30));
+  const today = kyivDate(Date.now());
+  const endDate = url.searchParams.get("end") && /^\d{4}-\d{2}-\d{2}$/.test(url.searchParams.get("end")!) ? url.searchParams.get("end")! : today;
+  const firstDate = addDays(endDate, -(n - 1));
+  const from = kyivTime(firstDate, 0), to = kyivTime(addDays(endDate, 1), 0);
+  const [hours, fc, sched, events] = await env.DB.batch([
+    env.DB.prepare("SELECT * FROM hourly WHERE hour_ts >= ? AND hour_ts < ? ORDER BY hour_ts").bind(from, to),
+    env.DB.prepare("SELECT period_end, p50 FROM pv_forecast_first WHERE period_end > ? AND period_end <= ?").bind(from, to),
+    env.DB.prepare("SELECT date, status, slots FROM outage_days WHERE role = 'home' AND date >= ? AND date <= ?").bind(firstDate, endDate),
+    env.DB.prepare(`SELECT ts, grid_on, prev_ts FROM grid_events WHERE ts >= COALESCE((SELECT MAX(ts) FROM grid_events WHERE ts < ?1), ?1) AND ts < ?2 ORDER BY ts`).bind(from, to),
+  ]);
+  const byDay = new Map<string, HourRow[]>();
+  for (const h of hours.results as unknown as HourRow[]) {
+    const d = kyivDate(h.hour_ts);
+    if (!byDay.has(d)) byDay.set(d, []);
+    byDay.get(d)!.push(h);
+  }
+  const fcByDay = new Map<string, number>();
+  for (const p of fc.results as { period_end: number; p50: number }[]) {
+    const d = kyivDate(p.period_end - 1);
+    fcByDay.set(d, (fcByDay.get(d) ?? 0) + p.p50 * 500); // kW × 0.5 h → Wh
+  }
+  const schedByDay = new Map((sched.results as { date: string; status: string; slots: string }[]).map((r) => [r.date, r]));
+  const outages = outagesFromEvents(events.results as { ts: number; grid_on: number; prev_ts: number }[]);
+  const days = [];
+  for (let d = firstDate; d <= endDate; d = addDays(d, 1)) {
+    const rows = byDay.get(d) ?? [];
+    const s = sumRows(rows, kyivTime(d, 0));
+    const dayStart = kyivTime(d, 0), dayEnd = kyivTime(addDays(d, 1), 0);
+    const sc = schedByDay.get(d);
+    let schedMin = 0;
+    try { if (sc?.status === "ScheduleApplies") for (const [a, b] of JSON.parse(sc.slots) as [number, number][]) schedMin += b - a; } catch { /* */ }
+    days.push({
+      date: d, ...s, hours: rows.length,
+      self_sufficiency: s.load_wh > 0 ? Math.max(0, Math.min(1, 1 - s.grid_import_wh / s.load_wh)) : null,
+      forecast_wh: fcByDay.get(d) ?? null,
+      scheduled_off_min: sc ? schedMin : null,
+      schedule_status: sc?.status ?? null,
+      outages: outages.filter((o) => o.start < dayEnd && (o.end ?? Date.now()) > dayStart).length,
+    });
+  }
+  return { first: firstDate, last: endDate, days };
+}
+
+/** Real outages next to what Yasno had scheduled (home address). */
+async function apiOutageLog(env: Env, url: URL) {
+  const { from, to } = rangeParams(url, 30 * DAY);
+  const [events, sched, changes] = await env.DB.batch([
+    env.DB.prepare(`SELECT ts, grid_on, prev_ts FROM grid_events WHERE ts >= COALESCE((SELECT MAX(ts) FROM grid_events WHERE ts < ?1), ?1) AND ts < ?2 ORDER BY ts`).bind(from, to),
+    env.DB.prepare("SELECT date, status, slots, updated_on FROM outage_days WHERE role = 'home' AND date >= ? AND date <= ? ORDER BY date")
+      .bind(kyivDate(from), kyivDate(to)),
+    env.DB.prepare("SELECT ts, role, date, before, after FROM outage_changes WHERE ts >= ? AND ts < ? ORDER BY ts DESC LIMIT 200").bind(from, to),
+  ]);
+  const real = outagesFromEvents(events.results as { ts: number; grid_on: number; prev_ts: number }[]).filter((o) => (o.end ?? Infinity) >= from);
+  const scheduled: { start: number; end: number; date: string }[] = [];
+  for (const r of sched.results as { date: string; status: string; slots: string }[]) {
+    if (r.status !== "ScheduleApplies") continue;
+    try { for (const [a, b] of JSON.parse(r.slots) as [number, number][]) scheduled.push({ date: r.date, start: kyivTime(r.date, a), end: kyivTime(r.date, b) }); } catch { /* */ }
+  }
+  return {
+    from, to, real: real.reverse(), scheduled: scheduled.reverse(),
+    statuses: (sched.results as { date: string; status: string }[]).map((r) => ({ date: r.date, status: r.status })),
+    changes: (changes.results as { ts: number; role: string; date: string; before: string | null; after: string }[]).map((c) => ({
+      ...c, before: c.before ? JSON.parse(c.before) : null, after: JSON.parse(c.after),
+    })),
+    durations_ms: outageDurations(events.results as { ts: number; grid_on: number }[]),
+  };
+}
+
+/** Forecast vs actual per 30-min period, actual marked when throttled. ?from&to */
+async function apiForecastActual(env: Env, url: URL) {
+  const { from, to } = rangeParams(url, DAY);
+  if (to - from > 62 * DAY) throw new BadRequest("range too long");
+  const [actual, fc, first] = await env.DB.batch([
+    env.DB.prepare(
+      `SELECT (ts / 1800000) * 1800000 + 1800000 AS pe, AVG(pv_w) AS pv, COUNT(*) AS n,
+              SUM(CASE WHEN soc >= 98 AND batt_w >= -50 THEN 1 ELSE 0 END) AS thr
+       FROM samples WHERE ts >= ? AND ts < ? GROUP BY pe ORDER BY pe`,
+    ).bind(from, to),
+    env.DB.prepare("SELECT period_end, p10, p50, p90 FROM pv_forecast WHERE period_end > ? AND period_end <= ? ORDER BY period_end").bind(from, to),
+    env.DB.prepare("SELECT period_end, p50 FROM pv_forecast_first WHERE period_end > ? AND period_end <= ? ORDER BY period_end").bind(from, to),
+  ]);
+  return { from, to, actual: actual.results, forecast: fc.results, first: first.results };
 }
 
 async function apiHealth(env: Env) {
-  const [last, hb, counts] = await env.DB.batch([
+  const now = Date.now();
+  const [last, hb, counts, cfg, subs, hourly] = await env.DB.batch([
     env.DB.prepare("SELECT MAX(ts) AS ts FROM samples"),
     env.DB.prepare("SELECT received_at, json FROM heartbeats ORDER BY received_at DESC LIMIT 1"),
-    env.DB.prepare("SELECT COUNT(*) AS n FROM samples WHERE ts > ?").bind(Date.now() - 24 * 3600 * 1000),
+    env.DB.prepare("SELECT COUNT(*) AS n FROM samples WHERE ts > ?").bind(now - 24 * HOUR),
+    env.DB.prepare("SELECT key, value FROM config WHERE key IN ('yasno_status','solcast_status','solcast_budget','pv_factor','charge_w','capacity_est')"),
+    env.DB.prepare("SELECT COUNT(*) AS n FROM push_subscriptions"),
+    env.DB.prepare("SELECT MAX(hour_ts) AS h, MAX(updated_at) AS u FROM hourly"),
   ]);
+  const config: Record<string, unknown> = {};
+  for (const r of cfg.results as { key: string; value: string }[]) { try { config[r.key] = JSON.parse(r.value); } catch { /* */ } }
+  const hbRow = hb.results[0] as { received_at: number; json: string } | undefined;
+  let heartbeat: unknown = null;
+  if (hbRow) { try { heartbeat = { received_at: hbRow.received_at, ...JSON.parse(hbRow.json) }; } catch { heartbeat = { received_at: hbRow.received_at }; } }
+  const budget = config.solcast_budget as { utc_date: string; calls: number; last_call?: number } | undefined;
   return {
-    server_ms: Date.now(),
+    server_ms: now,
     last_sample_ts: (last.results[0] as { ts: number | null }).ts,
     samples_24h: (counts.results[0] as { n: number }).n,
-    heartbeat: parseHeartbeat(hb.results[0] as { received_at: number; json: string } | undefined),
+    heartbeat,
+    yasno: (config.yasno_status as JobStatus) ?? null,
+    solcast: {
+      ...((config.solcast_status as JobStatus) ?? {}),
+      calls_today: budget && budget.utc_date === new Date(now).toISOString().slice(0, 10) ? budget.calls : 0,
+      last_call: budget?.last_call ?? null,
+      configured: !!(env.SOLCAST_API_KEY && env.SOLCAST_RESOURCE_ID),
+    },
+    pv_factor: config.pv_factor ?? null,
+    charge_w: config.charge_w ?? null,
+    capacity_est: config.capacity_est ?? null,
+    push_subscriptions: (subs.results[0] as { n: number }).n,
+    rollup: hourly.results[0] ?? null,
+    hour_fields: HOUR_FIELDS,
   };
 }

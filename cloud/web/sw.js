@@ -1,7 +1,11 @@
-// Minimal service worker: network-first for static files, cache as offline fallback.
+// Service worker: network-first for static files with a cache fallback, and Web Push.
 // Navigations and /api are not intercepted, so Cloudflare Access login redirects keep working.
-const CACHE = "deye-v2";
-const ASSETS = ["/style.css", "/app.js", "/icon.svg", "/manifest.webmanifest"];
+const CACHE = "deye-v3";
+const ASSETS = [
+  "/style.css", "/js/main.js", "/js/api.js", "/js/fmt.js", "/js/dom.js", "/js/svg.js", "/js/graphics.js",
+  "/js/tabs/now.js", "/js/tabs/plan.js", "/js/tabs/history.js", "/js/tabs/system.js",
+  "/icon.svg", "/icon-192.png", "/manifest.webmanifest",
+];
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS)).catch(() => {}));
@@ -26,4 +30,32 @@ self.addEventListener("fetch", (e) => {
       })
       .catch(() => caches.match(e.request).then((r) => r ?? Response.error())),
   );
+});
+
+self.addEventListener("push", (e) => {
+  let d = {};
+  try { d = e.data ? e.data.json() : {}; } catch { d = { body: e.data?.text() }; }
+  e.waitUntil(self.registration.showNotification(d.title || "Інвертор", {
+    body: d.body || "",
+    tag: d.tag,
+    renotify: !!d.tag,
+    icon: "/icon-192.png",
+    badge: "/icon-192.png",
+    data: { url: d.url || "/#now" },
+  }));
+});
+self.addEventListener("notificationclick", (e) => {
+  e.notification.close();
+  const target = new URL(e.notification.data?.url || "/", self.location.origin).href;
+  e.waitUntil((async () => {
+    const all = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    for (const c of all) {
+      if (new URL(c.url).origin === self.location.origin) {
+        await c.focus();
+        if ("navigate" in c) c.navigate(target).catch(() => {});
+        return;
+      }
+    }
+    await self.clients.openWindow(target);
+  })());
 });

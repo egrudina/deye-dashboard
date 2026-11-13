@@ -6,62 +6,28 @@
   <title>Інвертор</title>
   <meta name="theme-color" content="#f9f9f7" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#0d0d0d" media="(prefers-color-scheme: dark)">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Інвертор">
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/icon-192.png">
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <main>
-    <header class="top">
-      <h1>Інвертор</h1>
-      <span id="freshness" class="muted"></span>
-    </header>
-
-    <section id="status" class="card status" aria-live="polite">
-      <div class="status-line"><span id="status-icon" aria-hidden="true"></span><strong id="status-text">Завантаження…</strong></div>
-      <div id="status-since" class="secondary"></div>
-    </section>
-
-    <section class="tiles">
-      <div class="card tile"><div class="tile-label">Батарея</div><div class="tile-value" id="t-soc">—</div><div class="tile-sub" id="t-batt"></div></div>
-      <div class="card tile"><div class="tile-label">Споживання</div><div class="tile-value" id="t-load">—</div><div class="tile-sub" id="t-phases"></div></div>
-      <div class="card tile"><div class="tile-label">Сонце</div><div class="tile-value" id="t-pv">—</div><div class="tile-sub" id="t-pv-sub"></div></div>
-      <div class="card tile"><div class="tile-label">Мережа</div><div class="tile-value" id="t-grid">—</div><div class="tile-sub" id="t-grid-sub"></div></div>
-    </section>
-
-    <section class="card">
-      <div class="chart-head">
-        <h2>Графіки</h2>
-        <div class="seg" role="group" aria-label="Період">
-          <button data-range="day" aria-pressed="true">Доба</button>
-          <button data-range="week" aria-pressed="false">Тиждень</button>
-          <button data-range="month" aria-pressed="false">Місяць</button>
-        </div>
-      </div>
-      <h3>Потужність, Вт</h3>
-      <div class="legend" id="legend-power"></div>
-      <div class="chart" id="chart-power"></div>
-      <h3>Заряд батареї, %</h3>
-      <div class="chart chart-small" id="chart-soc"></div>
-      <p class="muted note"><span class="swatch-off"></span> сірим позначено час без світла. Батарея: «+» розряд, «−» заряд.</p>
-      <details>
-        <summary>Таблиця</summary>
-        <div class="table-wrap"><table id="table"><thead><tr><th>Час</th><th>Споживання</th><th>Сонце</th><th>Батарея</th><th>Заряд</th><th>Світло</th></tr></thead><tbody></tbody></table></div>
-      </details>
-    </section>
-
-    <section class="card">
-      <h2>Відключення</h2>
-      <ul id="outages" class="outages"><li class="muted">Завантаження…</li></ul>
-    </section>
-
-    <section class="card">
-      <h2>Стан системи</h2>
-      <dl id="health" class="health"></dl>
-    </section>
-  </main>
+  <header class="topbar">
+    <h1 id="title">Зараз</h1>
+    <span id="freshness" class="chip" hidden></span>
+  </header>
+  <main id="view" tabindex="-1"></main>
+  <nav class="tabbar" aria-label="Розділи">
+    <a href="#now" data-tab="now"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg><span>Зараз</span></a>
+    <a href="#plan" data-tab="plan"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg><span>План</span></a>
+    <a href="#history" data-tab="history"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg><span>Історія</span></a>
+    <a href="#system" data-tab="system"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/></svg><span>Система</span></a>
+  </nav>
   <div id="tooltip" class="tooltip" role="status" hidden></div>
-  <script src="/app.js" type="module"></script>
+  <script src="/js/main.js" type="module"></script>
 </body>
 </html>

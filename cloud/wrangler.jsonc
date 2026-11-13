@@ -21,15 +21,16 @@
       "migrations_dir": "migrations"
     }
   ],
-  // Hourly: purge raw_samples and heartbeats older than 7 days.
-  "triggers": { "crons": ["17 * * * *"] },
+  // Hourly: purge raw_samples and heartbeats older than 7 days, calibration.
+  // Every 15 min: energy rollups, Yasno schedule, Solcast (when a call is due), notifications.
+  "triggers": { "crons": ["17 * * * *", "*/15 * * * *"] },
   "vars": {
     // Filled after the Access application exists (Zero Trust → Access → Applications → <app> → Overview).
     // Empty = every non-ingest request gets 503 (fail closed).
     "ACCESS_TEAM_DOMAIN": "https://deye-kyiv-1.cloudflareaccess.com",
     "ACCESS_AUD": "c237a5c1932be80b9933b42fcfff9f7227c676e7939e41a0ed2f7a94c92f3b84"
   },
-  // Secrets (not here): PUSH_KEY. Local dev: .dev.vars (gitignored).
+  // Secrets (not here): PUSH_KEY, SOLCAST_API_KEY, SOLCAST_RESOURCE_ID, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT. Local dev: .dev.vars (gitignored).
   "observability": {
     "enabled": true,
     "head_sampling_rate": 1,
