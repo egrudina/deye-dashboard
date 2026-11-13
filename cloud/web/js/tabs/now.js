@@ -4,6 +4,7 @@ import { cached, load, AuthError } from "../api.js";
 import { h } from "../dom.js";
 import * as f from "../fmt.js";
 import { batteryRing, dayStrip, energyFlow, phaseBars } from "../graphics.js";
+import { isIos, isStandalone } from "../push.js";
 
 const STALE_MS = 3 * 60e3;
 let root, app, data, alive = false;
@@ -141,6 +142,7 @@ function render() {
   );
 
   root.replaceChildren(
+    installHint(),
     headline,
     h("div.grid2", battCard, flowCard),
     h("div.grid2", loadCard, sunCard),
@@ -160,4 +162,15 @@ function splitUnit(text) {
   const num = text.slice(0, i), unit = text.slice(i + 1);
   // "кВт·год" etc.
   return [num, h("span.unit", unit)];
+}
+
+/** Safari on iPhone, not installed: a short "add to Home Screen" hint (dismissible). */
+function installHint() {
+  let dismissed = false;
+  try { dismissed = localStorage.getItem("hint-install") === "1"; } catch { /* blocked */ }
+  if (dismissed || !isIos() || isStandalone()) return null;
+  const card = h("section.card.hint",
+    h("div.row", h("span", "Додайте застосунок на Початковий екран: «Поділитися» → «На Початковий екран». Так працюють сповіщення."),
+      h("button.btn", { "aria-label": "Сховати", onclick: () => { try { localStorage.setItem("hint-install", "1"); } catch { /* */ } card.remove(); } }, "×")));
+  return card;
 }
