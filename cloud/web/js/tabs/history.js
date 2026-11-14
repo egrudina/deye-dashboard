@@ -31,7 +31,7 @@ function build() {
   const prev = h("button.btn", { "aria-label": "Раніше", onclick: () => shift(-1) }, "‹");
   const next = h("button.btn", { "aria-label": "Пізніше", onclick: () => shift(1) }, "›");
   els = {
-    date,
+    date, next,
     summary: h("section.card"),
     main: h("section.card"),
     phases: h("section.card"),
@@ -39,11 +39,14 @@ function build() {
     outages: h("section.card"),
   };
   put(root, 
-    h("section.card", h("div.chart-head", seg, h("div", { style: { display: "flex", gap: "6px", alignItems: "center" } }, prev, date, next))),
+    h("section.card", h("div.chart-head", seg, h("div.datenav", prev, date, next))),
     els.summary, els.main, els.phases, els.sun, els.outages,
   );
   for (const k of ["summary", "main", "phases", "sun", "outages"]) els[k].append(h("p.muted", "Завантаження…"));
+  syncNav();
 }
+/** "Later" is off when the period already ends today. */
+function syncNav() { els.next.disabled = endDate >= f.dateKey(Date.now()); }
 
 function shift(dir) {
   const [y, m, d] = endDate.split("-").map(Number);
@@ -58,6 +61,7 @@ const midnightOf = (date) => f.kyivMidnight(Date.parse(`${date}T12:00:00Z`));
 
 export async function refresh() {
   const seq = ++reqSeq;
+  syncNav();
   const days = RANGES[range];
   const to = Math.min(Date.now(), midnightOf(endDate) + 30 * 3600e3 > Date.now() ? Date.now() : f.kyivMidnight(midnightOf(endDate) + 30 * 3600e3));
   const from = f.kyivMidnight(midnightOf(endDate) - (days - 1) * 86400e3 + 3600e3);
@@ -65,7 +69,7 @@ export async function refresh() {
   try {
     const [daily, series, log, fa, outages] = await Promise.all([
       get(`/api/daily?days=${days}&end=${endDate}`),
-      range === "day" || range === "week" ? get(`/api/series?from=${from}&to=${end}`) : Promise.resolve(null),
+      range === "day" || range === "week" ? get(`/api/series?from=${from}&to=${end}${range === "day" ? "&step=300000" : ""}`) : Promise.resolve(null),
       get(`/api/outage-log?from=${Math.min(from, Date.now() - 30 * 86400e3)}&to=${Date.now()}`),
       get(`/api/forecast-actual?from=${from}&to=${f.kyivMidnight(midnightOf(endDate) + 30 * 3600e3)}`),
       get(`/api/outages?from=${from}&to=${end}`),
@@ -102,24 +106,54 @@ function drawSummary() {
   const days = cache.daily.days;
   const t = totals(days);
   const names = app.shared().phase_names;
-  const self = t.load_wh > 0 ? Math.max(0, Math.min(1, 1 - t.grid_import_wh / t.load_wh)) : null;
-  const pvShare = t.load_wh > 0 ? Math.min(1, t.pv_wh / t.load_wh) : null;
   const title = range === "day" ? `Підсумок: ${f.weekday(midnightOf(endDate) + 12 * 3600e3)}` : `Підсумок за ${days.length} дн.`;
-  const stat = (v, l) => h("div.stat", h("div.v", v), h("div.l", l));
-  put(els.summary, 
+  if (t.hours === 0) { put(els.summary, h("h2", title), h("p.muted", "За цей період даних немає.")); return; }
+
+  // Where the consumed energy came from. Grid first, the rest is our own: battery, then sun.
+  const load = Math.max(0, t.load_wh);
+  const grid = Math.min(load, Math.max(0, t.grid_import_wh));
+  const batt = Math.min(load - grid, Math.max(0, t.batt_discharge_wh));
+  const sun = load - grid - batt;
+  const self = load > 0 ? 1 - grid / load : null;
+  const mix = [
+    { name: "сонце", v: sun, color: "var(--s2)" },
+    { name: "батарея", v: batt, color: "var(--s3)" },
+    { name: "мережа", v: grid, color: "var(--s4)" },
+  ].filter((x) => x.v >= 50);
+  const mixText = mix.map((x) => `${x.name} ${f.kWh(x.v)}`).join(", ");
+  const bar = h("div.mix", { role: "img", "aria-label": `Звідки енергія: ${mixText}` },
+    mix.map((x) => h("i", { style: { flexGrow: String(x.v), background: x.color } })));
+  const key = h("div.mix-key", mix.map((x, i) => h("span", { style: `--c:${x.color}` }, `${x.name} `, h("b", i === mix.length - 1 ? f.kWh(x.v) : f.kWhNum(x.v)))));
+
+  const soc = t.soc_min == null ? "—" : t.soc_min === t.soc_max ? `${t.soc_min}%` : `${t.soc_min}–${t.soc_max}%`;
+  const off = t.off_min ? `${f.duration(t.off_min * 60e3)}${t.outages ? ` (${t.outages} раз)` : ""}` : "не було";
+  const row = (k, v) => [h("dt", k), h("dd", v)];
+  const phaseMax = Math.max(1, t.load_a_wh, t.load_b_wh, t.load_c_wh);
+  const phase = (k, v) => h("div.phase",
+    h("span.name", names[k]),
+    h("span.bar", h("i", { style: { width: `${(Math.max(0, v) / phaseMax) * 100}%`, background: `var(--p${k})` } })),
+    h("b", f.kWh(v)));
+
+  put(els.summary,
     h("h2", title),
-    t.hours === 0 ? h("p.muted", "За цей період даних немає.") : h("div.stats",
-      stat(f.kWh(t.load_wh), "спожито"),
-      stat(f.kWh(t.pv_wh), "дало сонце"),
-      stat(f.kWh(t.grid_import_wh), "з мережі"),
-      stat(self != null ? f.pct(self * 100) : "—", "без мережі (автономність)"),
-      stat(pvShare != null ? f.pct(pvShare * 100) : "—", "покрило сонце"),
-      stat(t.off_min ? f.duration(t.off_min * 60e3) : "0", `без світла${t.outages ? ` (${t.outages} раз)` : ""}`),
-      stat(t.soc_min != null ? `${t.soc_min}–${t.soc_max}%` : "—", "заряд мін–макс"),
-      stat(`${f.kWhNum(t.batt_discharge_wh)} / ${f.kWhNum(t.batt_charge_wh)}`, "батарея віддала / взяла, кВт·год"),
-    ),
-    t.hours > 0 ? h("p.note", `${names.a}: ${f.kWh(t.load_a_wh)} · ${names.b}: ${f.kWh(t.load_b_wh)} · ${names.c}: ${f.kWh(t.load_c_wh)}`) : null,
+    h("div.row",
+      h("div", h("div.big", ...unit(f.kWh(load))), h("div.sub", "спожито")),
+      self != null ? h("div", { style: { textAlign: "right" } }, h("div.big", f.pct(self * 100)), h("div.sub", "без мережі")) : null),
+    mix.length ? bar : null, mix.length ? key : null,
+    h("dl.kv",
+      row("Сонце виробило", f.kWh(t.pv_wh)),
+      row("Без світла", off),
+      row("Заряд батареї", soc),
+      row("Батарея віддала / взяла", `${f.kWhNum(t.batt_discharge_wh)} / ${f.kWh(t.batt_charge_wh)}`)),
+    h("h3", "По фазах"),
+    h("div.phases", phase("a", t.load_a_wh), phase("b", t.load_b_wh), phase("c", t.load_c_wh)),
   );
+}
+
+/** "11 кВт·год" → ["11", <span.unit>кВт·год</span>] */
+function unit(text) {
+  const i = text.lastIndexOf(" ");
+  return i < 0 ? [text] : [text.slice(0, i), h("span.unit", text.slice(i + 1))];
 }
 
 function drawMain() {
@@ -142,19 +176,22 @@ function drawMain() {
     return;
   }
   const pw = h("div.chart"), soc = h("div.chart.chart-small"), lg = h("div.legend");
-  put(els.main, h("h2", "Потужність"), lg, pw, h("h3", "Заряд батареї, %"), soc,
-    h("p.note", h("span.swatch-off"), " сірим — без світла. Батарея: «+» розряд, «−» заряд."),
+  put(els.main, h("h2", "Потужність, кВт"), lg, pw, h("h3", "Заряд батареї, %"), soc,
+    h("p.note", h("span.swatch-off"), " без світла. Батарея: «+» розряд, «−» заряд.",
+      range === "day" ? " Середнє за 5 хвилин." : ""),
     tableDetails(series));
-  const shades = cache.outages.map((o) => ({ start: o.start, end: o.end ?? Date.now(), cls: "off" }));
+  const shades = cache.outages.map((o) => ({ start: o.start, end: o.end ?? Date.now(), cls: "outage" }));
   const step = series.step;
   const pt = (k) => series.points.map((p) => ({ t: p.t + step / 2, v: p[k] }));
-  legend(lg, [{ name: "Споживання", color: "--s1" }, { name: "Сонце", color: "--s2" }, { name: "Батарея", color: "--s3" }]);
+  legend(lg, [{ name: "Споживання", color: "--s1" }, { name: "Сонце", color: "--s2" }, { name: "Мережа", color: "--s4" }, { name: "Батарея", color: "--s3" }]);
   timeChart(pw, {
-    from, to, label: "Споживання, сонце, батарея", shades, gapMs: step * 2.5,
+    from, to, label: "Споживання, сонце, мережа, батарея", shades, gapMs: step * 2.5,
     series: [
-      { name: "Споживання", color: "--s1", points: pt("load_total"), step },
-      { name: "Сонце", color: "--s2", points: pt("pv_w"), step },
+      // Sun first and filled, so the consumption line stays visible on top of it.
+      { name: "Сонце", color: "--s2", points: pt("pv_w"), step, area: true },
+      { name: "Мережа", color: "--s4", points: pt("grid_import_w"), step },
       { name: "Батарея", color: "--s3", points: pt("batt_w"), step },
+      { name: "Споживання", color: "--s1", points: pt("load_total"), step },
     ],
   });
   timeChart(soc, {
@@ -179,33 +216,28 @@ function drawPhases() {
     // Hourly kWh per phase for the day.
     const c = h("div.chart"), lg = h("div.legend");
     put(els.phases, h("h2", "Споживання по фазах, кВт·год за годину"), lg, c);
-    legend(lg, [{ name: names.a, color: "--s1" }, { name: names.b, color: "--s1" }, { name: names.c, color: "--s1" }]);
+    legend(lg, [{ name: names.a, color: "--pa" }, { name: names.b, color: "--pb" }, { name: names.c, color: "--pc" }]);
     get(`/api/hourly?from=${midnightOf(endDate)}&to=${f.kyivMidnight(midnightOf(endDate) + 30 * 3600e3)}`).then((r) => {
       if (!alive) return;
       barChart(c, {
-        label: "Споживання по фазах за годинами", yFmt: (v) => `${v / 1000}`,
+        label: "Споживання по фазах за годинами",
         items: hourSlots(r.hours).map((x) => ({
           label: f.time(x.hour_ts).slice(0, 2), title: `${f.time(x.hour_ts)}–${f.time(x.hour_ts + 3600e3)}`,
-          parts: [{ v: x.load_a_wh, cls: "bar-a", name: names.a, color: "--s1" }, { v: x.load_b_wh, cls: "bar-b", name: names.b }, { v: x.load_c_wh, cls: "bar-c", name: names.c }],
+          parts: [{ v: x.load_a_wh, cls: "bar-a", name: names.a, color: "--pa" }, { v: x.load_b_wh, cls: "bar-b", name: names.b, color: "--pb" }, { v: x.load_c_wh, cls: "bar-c", name: names.c, color: "--pc" }],
           extra: [{ name: "сонце", v: x.pv_wh }, { name: "з мережі", v: x.grid_import_wh }],
         })),
       });
-      // Shades for the legend swatches.
-      lg.children[1]?.style.setProperty("--c", "color-mix(in srgb, var(--s1) 62%, var(--surface))");
-      lg.children[2]?.style.setProperty("--c", "color-mix(in srgb, var(--s1) 34%, var(--surface))");
     }).catch(() => {});
     return;
   }
   const c = h("div.chart"), lg = h("div.legend");
   put(els.phases, h("h2", "Споживання по фазах, кВт·год за добу"), lg, c, dailyTable(days, names));
-  legend(lg, [{ name: names.a, color: "--s1" }, { name: names.b, color: "--s1" }, { name: names.c, color: "--s1" }]);
-  lg.children[1]?.style.setProperty("--c", "color-mix(in srgb, var(--s1) 62%, var(--surface))");
-  lg.children[2]?.style.setProperty("--c", "color-mix(in srgb, var(--s1) 34%, var(--surface))");
+  legend(lg, [{ name: names.a, color: "--pa" }, { name: names.b, color: "--pb" }, { name: names.c, color: "--pc" }]);
   barChart(c, {
     label: "Споживання по фазах за днями",
     items: days.map((d) => ({
       label: String(Number(d.date.slice(8))), title: f.weekday(midnightOf(d.date) + 12 * 3600e3),
-      parts: [{ v: d.load_a_wh, cls: "bar-a", name: names.a, color: "--s1" }, { v: d.load_b_wh, cls: "bar-b", name: names.b }, { v: d.load_c_wh, cls: "bar-c", name: names.c }],
+      parts: [{ v: d.load_a_wh, cls: "bar-a", name: names.a, color: "--pa" }, { v: d.load_b_wh, cls: "bar-b", name: names.b, color: "--pb" }, { v: d.load_c_wh, cls: "bar-c", name: names.c, color: "--pc" }],
       extra: [{ name: "усього", v: d.load_wh }],
     })),
   });
@@ -237,17 +269,23 @@ function drawSun() {
   const fcMap = new Map(fa.forecast.map((x) => [x.period_end, x.p50 * 1000]));
   let sf = 0, sa = 0, n = 0;
   for (const a of pairs) { const fw = fcMap.get(a.pe); if (fw != null && fw >= 300) { sf += fw; sa += a.pv; n++; } }
-  put(els.sun, h("h2", "Сонце: прогноз і факт"), lg, c,
+  const nowMs = Date.now();
+  const seam = nowMs > from && nowMs < to;
+  put(els.sun, h("h2", "Сонце: прогноз і факт, кВт"), lg, c,
     h("p.note", n >= 4 ? `На неурізаних даних факт = ${f.pct((sa / sf) * 100)} від прогнозу (${n} півгодин).`
       : "Мало даних для порівняння: коли батарея повна, панелі урізаються, і такі проміжки не враховуються."),
-    h("p.note", "Світлі точки — батарея повна, сонце урізане (не порівнюється)."));
+    h("p.note", "Порожні точки — батарея повна, сонце урізане (не порівнюється).",
+      seam ? " Ліворуч від «зараз» — останній прогноз перед кожною годиною, праворуч — свіжий, тому на межі лінія може мати злам." : ""));
   legend(lg, [{ name: "Факт", color: "--s2" }, { name: "Прогноз", color: "--s4" }, { name: "Прогноз на початок дня", color: "--s4", dash: true }]);
   const mid = (pe) => pe - 15 * 60e3;
+  const fcPts = fa.forecast.map((x) => ({ t: mid(x.period_end), v: x.p50 * 1000 }));
   const r = timeChart(c, {
-    from, to, label: "Сонце: прогноз і факт", shades: nights(from, to),
+    from, to, now: seam ? nowMs : null, label: "Сонце: прогноз і факт", shades: nights(from, to),
     series: [
       { name: "Факт", color: "--s2", points: fa.actual.map((a) => ({ t: mid(a.pe), v: a.pv })), step: 30 * 60e3, gap: true },
-      { name: "Прогноз", color: "--s4", points: fa.forecast.map((x) => ({ t: mid(x.period_end), v: x.p50 * 1000 })), step: 30 * 60e3 },
+      // The stored forecast for past periods is frozen, for coming ones it is the latest: two runs, split at "now".
+      { name: "Прогноз", color: "--s4", points: fcPts.filter((p) => p.t <= nowMs), step: 30 * 60e3 },
+      { name: "Прогноз", color: "--s4", points: fcPts.filter((p) => p.t > nowMs), step: 30 * 60e3, opacity: 0.55 },
       { name: "На початок дня", color: "--s4", dash: true, points: fa.first.map((x) => ({ t: mid(x.period_end), v: x.p50 * 1000 })), step: 30 * 60e3 },
     ],
     gapMs: 45 * 60e3,
@@ -258,8 +296,7 @@ function drawSun() {
       if (!a.thr || a.pv < 20) continue;
       const x = r.x(mid(a.pe)), y = r.y(a.pv);
       const dot = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-      dot.setAttribute("cx", x); dot.setAttribute("cy", y); dot.setAttribute("r", 3); dot.setAttribute("class", "dotp");
-      dot.setAttribute("fill", "var(--surface-2)"); dot.setAttribute("stroke", "var(--s2)");
+      dot.setAttribute("cx", x); dot.setAttribute("cy", y); dot.setAttribute("r", 3.5); dot.setAttribute("class", "dotp");
       r.svg.append(dot);
     }
   }

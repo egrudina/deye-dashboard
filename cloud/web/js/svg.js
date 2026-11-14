@@ -41,7 +41,7 @@ export function niceTicks(min, max, count) {
 /** X ticks at Kyiv-local round hours/days. */
 function timeTicks(from, to) {
   const span = to - from;
-  const step = span <= 13 * 3600e3 ? 2 * 3600e3 : span <= 30 * 3600e3 ? 4 * 3600e3 : span <= 60 * 3600e3 ? 6 * 3600e3 : span <= 9 * 86400e3 ? 86400e3 : 5 * 86400e3;
+  const step = span <= 13 * 3600e3 ? 2 * 3600e3 : span <= 30 * 3600e3 ? 4 * 3600e3 : span <= 60 * 3600e3 ? 12 * 3600e3 : span <= 9 * 86400e3 ? 86400e3 : 5 * 86400e3;
   const ticks = [];
   let t = f.kyivMidnight(from);
   if (step >= 86400e3) {
@@ -55,7 +55,8 @@ function timeTicks(from, to) {
 /**
  * Time-series chart.
  * opts: { from, to, series: [{ name, color, points: [{t, v}], dash, band: [{t, lo, hi}], fmt, step }],
- *         y: { min, max, unit, fmt }, shades: [{ start, end, cls }], floor: number, now: ms, label, gapMs }
+ *         (series also: area — fill down to zero, opacity)
+ *         y: { min, max, unit, fmt } (default: watts shown as kW numbers), shades: [{ start, end, cls }], floor: number, now: ms, label, gapMs }
  */
 export function timeChart(container, opts) {
   hideTip();
@@ -79,7 +80,7 @@ export function timeChart(container, opts) {
   const ticks = niceTicks(lo, hi, 4);
   lo = Math.min(lo, ticks[0]); hi = Math.max(hi, ticks[ticks.length - 1]);
   const y = (v) => m.t + (1 - (v - lo) / (hi - lo || 1)) * (H - m.t - m.b);
-  const yFmt = opts.y?.fmt ?? ((v) => (Math.abs(v) >= 1000 ? `${v / 1000}к` : `${v}`));
+  const yFmt = opts.y?.fmt ?? f.kW;
 
   for (const s of opts.shades ?? []) {
     const a = Math.max(s.start, from), b = Math.min(s.end ?? to, to);
@@ -93,8 +94,14 @@ export function timeChart(container, opts) {
     el("line", { class: t === 0 ? "base-line" : "grid-line", x1: m.l, x2: W - m.r, y1: y(t), y2: y(t) }, svg);
     el("text", { class: "tick", x: m.l - 6, y: y(t) + 4, "text-anchor": "end" }, svg).textContent = yFmt(t);
   }
-  for (const tk of timeTicks(from, to)) {
-    el("text", { class: "tick", x: x(tk.t), y: H - 6, "text-anchor": "middle" }, svg).textContent = tk.label;
+  // A label at the right edge would stick out of the card: align it to the edge, and drop a neighbour it would cover.
+  const boxes = [];
+  for (const tk of timeTicks(from, to).reverse()) {
+    const edge = x(tk.t) > W - m.r - 24, w = tk.label.length * 6;
+    const a = edge ? W - m.r - w : x(tk.t) - w / 2, b = a + w;
+    if (boxes.some(([p, q]) => a < q + 3 && b > p - 3)) continue;
+    boxes.push([a, b]);
+    el("text", { class: "tick", x: edge ? W - m.r : x(tk.t), y: H - 6, "text-anchor": edge ? "end" : "middle" }, svg).textContent = tk.label;
   }
   if (opts.now != null && opts.now > from && opts.now < to) {
     el("line", { class: "nowline", x1: x(opts.now), x2: x(opts.now), y1: m.t, y2: H - m.b }, svg);
@@ -115,13 +122,23 @@ export function timeChart(container, opts) {
       el("path", { class: "band", d: `${top}${bot}Z`, fill: cssVar(s.color) }, svg);
     }
     if (s.points?.length) {
-      let d = "", prev = null;
+      // Unbroken runs of points; a gap longer than gapMs starts a new run.
+      const runs = [];
+      let prev = null;
       for (const p of s.points) {
         if (p.v == null) { prev = null; continue; }
-        d += `${prev == null || p.t - prev > gapMs ? "M" : "L"}${x(p.t).toFixed(1)},${y(p.v).toFixed(1)}`;
+        if (prev == null || p.t - prev > gapMs) runs.push([]);
+        runs[runs.length - 1].push(p);
         prev = p.t;
       }
-      el("path", { class: `series${s.dash ? " dash" : ""}`, d, stroke: cssVar(s.color) }, svg);
+      const line = (run) => run.map((p, i) => `${i ? "L" : "M"}${x(p.t).toFixed(1)},${y(p.v).toFixed(1)}`).join("");
+      const base = y(Math.max(lo, 0)).toFixed(1);
+      if (s.area) {
+        for (const run of runs) {
+          el("path", { class: "area", d: `${line(run)}L${x(run[run.length - 1].t).toFixed(1)},${base}L${x(run[0].t).toFixed(1)},${base}Z`, fill: cssVar(s.color) }, svg);
+        }
+      }
+      el("path", { class: `series${s.dash ? " dash" : ""}`, d: runs.map(line).join(""), stroke: cssVar(s.color), opacity: s.opacity }, svg);
     }
   }
 
@@ -191,9 +208,12 @@ export function barChart(container, opts) {
   for (const it of items) hi = Math.max(hi, it.parts.reduce((s, p) => s + Math.max(0, p.v ?? 0), 0), it.marker ?? 0);
   if (hi <= 0) hi = 1000;
   const ticks = niceTicks(0, hi, 4);
+  // The top tick must not be below the tallest bar.
+  const tickStep = ticks[1] - ticks[0];
+  while (ticks[ticks.length - 1] < hi) ticks.push(Math.round((ticks[ticks.length - 1] + tickStep) * 1e6) / 1e6);
   hi = ticks[ticks.length - 1];
   const y = (v) => m.t + (1 - v / hi) * (H - m.t - m.b);
-  const fmtY = opts.yFmt ?? ((v) => `${v / 1000}`);
+  const fmtY = opts.yFmt ?? f.kW;
   for (const t of ticks) {
     el("line", { class: t === 0 ? "base-line" : "grid-line", x1: m.l, x2: W - m.r, y1: y(t), y2: y(t) }, svg);
     el("text", { class: "tick", x: m.l - 6, y: y(t) + 4, "text-anchor": "end" }, svg).textContent = fmtY(t);

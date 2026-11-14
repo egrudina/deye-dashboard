@@ -37,7 +37,7 @@ function render() { keepScroll(renderNow); }
 function renderNow() {
   const d = data, now = d.server_ms, p = d.projection;
   const showNeighbour = app.settings().neighbour !== false;
-  const lanes = h("div.chart", { style: { height: showNeighbour ? "52px" : "34px" } });
+  const lanes = h("div.chart", { style: { height: `${laneH(showNeighbour)}px` } });
   const socChart = h("div.chart.chart-small");
   const powChart = h("div.chart");
   const socLegend = h("div.legend"), powLegend = h("div.legend");
@@ -48,8 +48,8 @@ function renderNow() {
       h("h2", "Наступні 48 годин"),
       lanes,
       h("h3", "Заряд батареї, %"), socLegend, socChart,
-      h("h3", "Сонце і споживання"), powLegend, powChart,
-      h("p.note", "Сірим — ніч. Пунктир — песимістичний прогноз (мало сонця)."),
+      h("p.note", h("span.swatch-night"), " ніч ", h("span.swatch-off"), " без світла. Пунктир — песимістичний прогноз (мало сонця)."),
+      h("h3", "Сонце і споживання, кВт"), powLegend, powChart,
     ),
     h("section.card", h("h2", "Що буде"), eventsList(d, now, showNeighbour)),
     scheduleCard(d, now),
@@ -59,7 +59,7 @@ function renderNow() {
   const night = nights(from, to);
   drawLanes(lanes, d, from, to, showNeighbour);
 
-  const off = (d.projection?.points ?? []).length ? offSpans(p.points) : d.home.map((i) => ({ ...i, cls: "off" }));
+  const off = (d.projection?.points ?? []).length ? offSpans(p.points) : d.home.map((i) => ({ ...i, cls: "outage" }));
   legend(socLegend, [{ name: "Очікуваний", color: "--s3" }, { name: "Песимістичний", color: "--s3", dash: true }]);
   timeChart(socChart, {
     from, to, now, label: "Прогноз заряду батареї",
@@ -98,33 +98,36 @@ function offSpans(points) {
     if (points[i].grid_on) continue;
     const start = points[i].t;
     while (i < points.length && !points[i].grid_on) i++;
-    out.push({ start, end: points[Math.min(i, points.length - 1)].t, cls: "off" });
+    out.push({ start, end: points[Math.min(i, points.length - 1)].t, cls: "outage" });
   }
   return out;
 }
 
+const laneH = (showNeighbour) => (showNeighbour ? 62 : 34);
+
+/** Lanes above the charts, on the same time axis: planned outages and the neighbours' generator. Labels sit above each lane. */
 function drawLanes(container, d, from, to, showNeighbour) {
   container.replaceChildren();
-  const W = container.clientWidth || 320, H = showNeighbour ? 52 : 34, l = 40, r = 8;
+  const W = container.clientWidth || 320, H = laneH(showNeighbour), l = 40, r = 8;
   const x = (t) => l + ((Math.min(Math.max(t, from), to) - from) / (to - from)) * (W - l - r);
   const desc = [`Відключення: ${d.home.map((i) => `${f.when(i.start)}–${f.time(i.end)}`).join(", ") || "немає"}`];
   if (showNeighbour) desc.push(`генератор сусідів: ${d.loud.map((i) => `${f.when(i.start)}–${f.time(i.end)}`).join(", ") || "ні"}`);
   const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": desc.join("; ") }, container);
-  el("text", { class: "lane-label", x: 0, y: 15 }, svg).textContent = "Світло";
-  el("rect", { class: "lane-bg", x: l, y: 4, width: W - l - r, height: 14, rx: 4 }, svg);
-  for (const i of d.home) el("rect", { class: "lane-out", x: x(i.start), y: 4, width: Math.max(2, x(i.end) - x(i.start)), height: 14, rx: 3 }, svg);
+  el("text", { class: "lane-label", x: l, y: 10 }, svg).textContent = d.confidence === "schedule" ? "Відключення за графіком" : "Відключення (припущення)";
+  el("rect", { class: "lane-bg", x: l, y: 15, width: W - l - r, height: 14, rx: 4 }, svg);
+  for (const i of d.home) el("rect", { class: "lane-out", x: x(i.start), y: 15, width: Math.max(2, x(i.end) - x(i.start)), height: 14, rx: 3 }, svg);
   // What the projection assumes when there is no schedule.
   if (d.confidence !== "schedule") {
-    for (const s of offSpans(d.projection?.points ?? [])) el("rect", { class: "lane-out", x: x(s.start), y: 4, width: Math.max(2, x(s.end) - x(s.start)), height: 14, rx: 3, opacity: 0.4 }, svg);
+    for (const s of offSpans(d.projection?.points ?? [])) el("rect", { class: "lane-out", x: x(s.start), y: 15, width: Math.max(2, x(s.end) - x(s.start)), height: 14, rx: 3, opacity: 0.4 }, svg);
   }
   if (showNeighbour) {
-    el("text", { class: "lane-label", x: 0, y: 36 }, svg).textContent = "Сусіди";
-    el("rect", { class: "lane-bg", x: l, y: 30, width: W - l - r, height: 6, rx: 3 }, svg);
-    for (const i of d.neighbour) el("rect", { class: "lane-loud", x: x(i.start), y: 30, width: Math.max(2, x(i.end) - x(i.start)), height: 6, rx: 3, opacity: 0.25 }, svg);
-    for (const i of d.loud) el("rect", { class: "lane-loud", x: x(i.start), y: 30, width: Math.max(2, x(i.end) - x(i.start)), height: 6, rx: 3 }, svg);
+    el("text", { class: "lane-label", x: l, y: 45 }, svg).textContent = "Генератор сусідів";
+    el("rect", { class: "lane-bg", x: l, y: 50, width: W - l - r, height: 6, rx: 3 }, svg);
+    for (const i of d.neighbour) el("rect", { class: "lane-loud", x: x(i.start), y: 50, width: Math.max(2, x(i.end) - x(i.start)), height: 6, rx: 3, opacity: 0.25 }, svg);
+    for (const i of d.loud) el("rect", { class: "lane-loud", x: x(i.start), y: 50, width: Math.max(2, x(i.end) - x(i.start)), height: 6, rx: 3 }, svg);
   }
   const now = d.server_ms;
-  if (now > from && now < to) el("line", { class: "nowline", x1: x(now), x2: x(now), y1: 0, y2: H }, svg);
+  if (now > from && now < to) el("line", { class: "nowline", x1: x(now), x2: x(now), y1: 12, y2: H }, svg);
 }
 
 function eventsList(d, now, showNeighbour) {

@@ -1,6 +1,6 @@
 // Tab 1: Зараз. The headline sentence, big numbers, graphics. Data: /api/now.
 
-import { cached, load, AuthError } from "../api.js";
+import { cached, get, load, AuthError } from "../api.js";
 import { h, keepScroll } from "../dom.js";
 import * as f from "../fmt.js";
 import { batteryRing, dayStrip, energyFlow, phaseBars } from "../graphics.js";
@@ -8,6 +8,8 @@ import { isIos, isStandalone } from "../push.js";
 
 const STALE_MS = 3 * 60e3;
 let root, app, data, alive = false;
+// Real outages of today (from grid events), for the day strip. Refreshed every few minutes.
+let actual = null, actualAt = 0;
 
 export function mount(el, a) {
   root = el; app = a; alive = true;
@@ -25,9 +27,20 @@ export async function refresh() {
     if (!alive) return;
     data = d;
     render();
+    loadActual();
   } catch (e) {
     if (alive && !(e instanceof AuthError)) app.freshness("немає зв'язку", true);
   }
+}
+
+async function loadActual() {
+  if (Date.now() - actualAt < 5 * 60e3) return;
+  actualAt = Date.now();
+  try {
+    const r = await get(`/api/outages?from=${f.kyivMidnight(Date.now())}&to=${Date.now()}`);
+    actual = r.outages;
+    if (alive && data) render();
+  } catch { actualAt = 0; /* the strip then shows the plan only */ }
 }
 
 function render() { keepScroll(renderNow); }
@@ -55,13 +68,12 @@ function renderNow() {
   if (d.confidence === "history" && !s.grid_on) notes.push("Прогноз за історією відключень, без графіка.");
 
   const showLoud = settings.neighbour !== false && d.generator?.length;
-  const strip = h("div.strip");
+  const strip = h("div.strip"), stripKey = h("p.strip-key");
   const headline = h(`section.card.headline.${hl.tone}`, { "aria-live": "polite" },
     h("p.text", hl.text),
     hl.detail ? h("p.detail", hl.detail) : null,
     notes.length ? h("div.notes", notes.map((n) => h("p", n))) : null,
-    strip,
-    showLoud ? h("p.generator", `генератор сусідів: ${d.generator.map((g) => `${f.when(g.start, now)}–${f.time(g.end)}`).join(", ")}`) : null,
+    strip, stripKey,
   );
 
   // ---------- battery ----------
@@ -84,10 +96,10 @@ function renderNow() {
       ring,
       h("div",
         h("div.label", "Батарея"),
-        h("div.big", charging ? `+${f.W(-s.batt_w)}` : discharging ? `−${f.W(s.batt_w)}` : "у спокої"),
+        h(charging || discharging ? "div.big" : "div.big.calm", charging ? `+${f.W(-s.batt_w)}` : discharging ? `−${f.W(s.batt_w)}` : "у спокої"),
         charging || discharging ? h("div.sub", charging ? "заряджається" : "розряджається") : null,
         eta ? h("div.sub", eta) : null,
-        b.runtime_h != null && !s.grid_on ? h("div.sub.muted", `без сонця і мережі: ≈${f.duration(b.runtime_h * 3600e3)}`) : null,
+        b.runtime_h != null ? h("div.sub", `запас без сонця і мережі: ≈${f.duration(b.runtime_h * 3600e3)}`) : null,
       ),
     ),
   );
@@ -160,7 +172,13 @@ function renderNow() {
     gridCard,
   ].filter(Boolean));
 
-  dayStrip(strip, { now: Date.now(), outages: d.home_intervals ?? [], loud: showLoud ? d.generator : [] });
+  const st2 = dayStrip(strip, { now: Date.now(), outages: d.home_intervals ?? [], loud: showLoud ? d.generator : [], actual });
+  const anyReal = (actual ?? []).length > 0;
+  stripKey.replaceChildren(...[
+    st2.planned || anyReal ? h("span.k-out", "відключення") : h("span", "відключень за графіком немає"),
+    st2.missed ? h("span.k-plan", "було за графіком") : null,
+    showLoud ? h("span.k-loud", `генератор сусідів: ${d.generator.map((g) => `${f.when(g.start, now)}–${f.time(g.end)}`).join(", ")}`) : null,
+  ].filter(Boolean));
   batteryRing(ring, { soc: s.soc, floor: b.floor_pct ?? 15, ghost: ghostSub ? gh : null, sub: ghostSub, sub2: ghostWhen });
   energyFlow(flow, s);
   phaseBars(bars, { a: s.load_a, b: s.load_b, c: s.load_c, names, main });

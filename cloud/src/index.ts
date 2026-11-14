@@ -198,6 +198,7 @@ async function apiSeries(env: Env, url: URL) {
             AVG(soc) AS soc, AVG(batt_w) AS batt_w,
             AVG(load_total) AS load_total, AVG(load_a) AS load_a, AVG(load_b) AS load_b, AVG(load_c) AS load_c,
             AVG(pv_w) AS pv_w, AVG(grid_w) AS grid_w, AVG(ext_ct_w) AS ext_ct_w,
+            AVG(CASE WHEN grid_on = 1 THEN MAX(0, COALESCE(grid_total_w, 0)) ELSE 0 END) AS grid_import_w,
             AVG(grid_v_a) AS grid_v_a, AVG(grid_v_b) AS grid_v_b, AVG(grid_v_c) AS grid_v_c, AVG(grid_hz) AS grid_hz
      FROM samples WHERE ts >= ?2 AND ts < ?3
      GROUP BY t ORDER BY t`,

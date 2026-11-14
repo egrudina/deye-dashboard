@@ -10,6 +10,9 @@ const wdF = new Intl.DateTimeFormat("uk-UA", { timeZone: TZ, weekday: "short", d
 
 export const int = (v) => (v == null ? "—" : nf.format(Math.round(v)));
 export const W = (w) => (w == null ? "—" : Math.abs(w) >= 1000 ? `${nf1.format(w / 1000)} кВт` : `${nf.format(Math.round(w))} Вт`);
+const nf2 = new Intl.NumberFormat("uk-UA", { maximumFractionDigits: 2 });
+/** Watts as a bare kW number for chart axes: 2500 → "2,5". The unit goes into the chart title. */
+export const kW = (w) => (w == null ? "—" : nf2.format(w / 1000));
 export const kWh = (wh) => (wh == null ? "—" : `${wh >= 10000 ? nf.format(Math.round(wh / 1000)) : nf1.format(wh / 1000)} кВт·год`);
 export const kWhNum = (wh) => (wh == null ? "—" : wh >= 10000 ? nf.format(Math.round(wh / 1000)) : nf1.format(wh / 1000));
 export const pct = (v) => (v == null ? "—" : `${Math.round(v)}%`);
