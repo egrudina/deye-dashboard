@@ -1,0 +1,18 @@
+# systemd unit for the standalone pusher (see README.md, section "Pi").
+# Install: sudo cp deye-pusher.service /etc/systemd/system/ && sudo systemctl enable --now deye-pusher
+# Adjust the paths if you cloned the repo somewhere other than /opt/deye-dashboard.
+[Unit]
+Description=Deye pusher: sends inverter registers to the cloud
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=deye-pusher
+WorkingDirectory=/opt/deye-dashboard/pi/pusher
+ExecStart=/opt/deye-dashboard/pi/pusher/.venv/bin/python -u standalone.py
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

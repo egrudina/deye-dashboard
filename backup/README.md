@@ -1,5 +1,8 @@
 # backup/: everything needed to rebuild the Pi's SD card from scratch
 
+> **Author's own setup.** This page is about one specific install: the pusher runs inside an existing Telegram bot's
+> process on an Orange Pi with no SSH access. For a normal install (standalone pusher) see the README.
+
 Only this README is tracked by git. The other files contain secrets (bot token in `.env`, a GitHub PAT) and are
 gitignored. **Never commit, share or upload them.** Copy the folder to an encrypted place if you want an off-Mac backup.
 

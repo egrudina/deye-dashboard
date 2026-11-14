@@ -37,7 +37,7 @@ MAX_SIZE=$((256 * 1000 * 1000 * 1000))
 E2=/opt/homebrew/opt/e2fsprogs/sbin
 BOT=/home/deye/deye_telegram_bot
 DROPIN=/etc/systemd/system/deye_bot.service.d
-PUSH_URL=https://deye.grudina.info/api/ingest
+PUSH_URL=""  # read from cloud/.env.local (PUSH_URL=https://<your host>/api/ingest) in write
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 need_root() { [ "$(id -u)" -eq 0 ] || [ "${CARD_ALLOW_IMAGE:-}" = "1" ] || die "run with sudo: sudo $0 $*"; }
@@ -243,6 +243,8 @@ cmd_write() {
   # Staged files.
   cp "$ROOT"/pi/pusher/{pusher.py,push_start.py,run_push.sh,override.conf} "$T/"
   local key; key="$(env_get "$ROOT/cloud/.env.local" PUSH_KEY | tr -d "\"' \r")"
+  PUSH_URL="$(env_get "$ROOT/cloud/.env.local" PUSH_URL | tr -d "\"' \r")"
+  [[ "$PUSH_URL" == https://*/api/ingest ]] || die "PUSH_URL=https://<host>/api/ingest missing in cloud/.env.local"
   [ ${#key} -ge 32 ] || die "PUSH_KEY missing in cloud/.env.local"
   printf 'PUSH_URL=%s\nPUSH_KEY=%s\nPUSH_INTERVAL=30\n' "$PUSH_URL" "$key" > "$T/push.env"
   if grep -l $'\r' "$T"/{pusher.py,push_start.py,run_push.sh,override.conf,push.env,env.new} 2>/dev/null; then

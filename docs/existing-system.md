@@ -1,5 +1,8 @@
 # Existing system (as found on 2026-11-06)
 
+> **Author's own setup.** This page is about one specific install: the pusher runs inside an existing Telegram bot's
+> process on an Orange Pi with no SSH access. For a normal install (standalone pusher) see the README.
+
 ## Physical setup and network
 
 ```
@@ -39,8 +42,7 @@ Deye inverter ── Solarman Wi-Fi logger stick ──Wi-Fi──▶ home route
 - Enabled units: `deye_bot.service` + stock ones (ssh, cron, rsyslog, networkd, wpa_supplicant (unused)).
   No custom cron jobs or timers. No auto-deploy: he updated the code by hand with `git pull` + restart.
 - Logs: Armbian ramlog. `/var/log` on disk is mostly empty or old.
-- His git clone on the Pi has a **GitHub PAT embedded in the remote URL** (`.git/config`), and the same PAT in
-  `/home/deye/.bash_history`. The user decided to leave it. Never copy it anywhere.
+- The card holds the bot author's credentials (bot token, a GitHub token). Never copy them anywhere.
 
 ### systemd unit `/etc/systemd/system/deye_bot.service` (a copy of the repo file)
 

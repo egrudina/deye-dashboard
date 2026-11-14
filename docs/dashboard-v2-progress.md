@@ -1,7 +1,7 @@
 # Dashboard v2: build log
 
 Built overnight on 2026-11-13, branch `dashboard-v2`, from `docs/dashboard-v2-plan.md`.
-Deployed to https://deye.grudina.info after each step. Ingest code is unchanged (moved to `src/ingest.ts`;
+Deployed to the author's instance after each step. Ingest code is unchanged (moved to `src/ingest.ts`;
 it now also reports grid transitions to the push code, which runs in `ctx.waitUntil` and swallows errors).
 
 ## Status

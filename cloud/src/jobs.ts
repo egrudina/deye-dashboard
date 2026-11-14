@@ -5,8 +5,8 @@ import { countCall, correctionFactor, markBusy, isThrottled, parseForecast, solc
 import { getConfig, setConfig, setConfigStmt } from "./settings.ts";
 import { DAY, HOUR, kyivDate } from "./time.ts";
 import {
-  ADDR_BASE, DSO, PLANNED_URL, REGION, applyResolved, parseGroup, pickMatch, resolveDue, sameSlots, streetQuery,
-  type AddressState, type OutageDay, type Slot,
+  ADDR_BASE, applyResolved, parseGroup, pickMatch, plannedUrl, resolveDue, sameSlots, streetQuery, yasnoArea,
+  type AddressState, type OutageDay, type Slot, type YasnoArea,
 } from "./yasno.ts";
 
 export const POWER_COLS = "ts, grid_on, soc, batt_w, grid_total_w, load_total, load_a, load_b, load_c, pv_w";
@@ -69,30 +69,31 @@ async function getJson(url: string, timeoutMs = 10_000): Promise<unknown> {
   return res.json();
 }
 
-async function resolveGroup(a: AddressState): Promise<string> {
+async function resolveGroup(a: AddressState, area: YasnoArea): Promise<string> {
   const q = (o: Record<string, string | number>) => new URLSearchParams(Object.entries(o).map(([k, v]) => [k, String(v)])).toString();
   const sq = streetQuery(a.street);
   if (sq.length < 3) throw new Error("street name too short");
-  const streets = (await getJson(`${ADDR_BASE}/streets?${q({ regionId: REGION, dsoId: DSO, query: sq })}`)) as { id: number; value: string }[];
+  const streets = (await getJson(`${ADDR_BASE}/streets?${q({ regionId: area.region, dsoId: area.dso, query: sq })}`)) as { id: number; value: string }[];
   const street = pickMatch(streets ?? [], a.street);
   if (!street) throw new Error(`street not found: ${a.street}`);
-  const houses = (await getJson(`${ADDR_BASE}/houses?${q({ regionId: REGION, dsoId: DSO, streetId: street.id, query: a.house.replace(/[-\s].*$/, "") })}`)) as { id: number; value: string }[];
+  const houses = (await getJson(`${ADDR_BASE}/houses?${q({ regionId: area.region, dsoId: area.dso, streetId: street.id, query: a.house.replace(/[-\s].*$/, "") })}`)) as { id: number; value: string }[];
   const house = pickMatch(houses ?? [], a.house);
   if (!house) throw new Error(`house not found: ${a.house}`);
-  const g = (await getJson(`${ADDR_BASE}/group?${q({ regionId: REGION, dsoId: DSO, streetId: street.id, houseId: house.id })}`)) as { group?: number; subgroup?: number };
+  const g = (await getJson(`${ADDR_BASE}/group?${q({ regionId: area.region, dsoId: area.dso, streetId: street.id, houseId: house.id })}`)) as { group?: number; subgroup?: number };
   if (g?.group == null) throw new Error("no group in answer");
   return `${g.group}.${g.subgroup ?? 1}`;
 }
 
 export async function yasno(env: Env, now = Date.now()): Promise<ScheduleChange[]> {
   const roles = ["home", "neighbour"] as const;
+  const area = yasnoArea(env);
   const addrs: Partial<Record<(typeof roles)[number], AddressState>> = {};
   for (const role of roles) {
     let a = await getConfig<AddressState>(env.DB, `addr_${role}`);
     if (!a?.street) continue;
     if (resolveDue(a, now)) {
       try {
-        a = applyResolved(a, await resolveGroup(a), now);
+        a = applyResolved(a, await resolveGroup(a, area), now);
       } catch (e) {
         a = { ...a, checked_at: now, error: String(e).slice(0, 200) };
         log("warn", "yasno resolve failed", { role, error: String(e) });
@@ -105,7 +106,7 @@ export async function yasno(env: Env, now = Date.now()): Promise<ScheduleChange[
 
   let body: unknown;
   try {
-    body = await getJson(PLANNED_URL, 15_000);
+    body = await getJson(plannedUrl(area), 15_000);
   } catch (e) {
     await status(env.DB, "yasno_status", e);
     throw e;

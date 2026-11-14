@@ -1,5 +1,8 @@
 # Deploying to the Pi (no SSH): clone the card, write files with debugfs, swap
 
+> **Author's own setup.** This page is about one specific install: the pusher runs inside an existing Telegram bot's
+> process on an Orange Pi with no SSH access. For a normal install (standalone pusher) see the README.
+
 The original card is never modified. It's the rollback: power off, put it back, power on.
 
 Commands that touch disks need `sudo`. The user runs them with `! sudo …` in the Claude session.

@@ -1,5 +1,15 @@
 # Architecture
 
+The pusher runs in one of two modes. Both use the same `pusher.py` and send the same payload.
+
+- **Standalone** (`standalone.py`, the normal install, see README): its own process and systemd unit
+  (`deye-pusher.service`), its own connection to the logger stick, settings in `push.env`
+  (`INVERTER_IP`, `INVERTER_SERIAL`, `INVERTER_PORT` next to the `PUSH_*` keys), dependencies in `requirements.txt`.
+  It retries the connection every 30 s until the stick answers.
+- **Inside an existing bot** (`push_start.py`, the author's own install): the Pi already runs a Telegram bot that keeps a
+  connection to the stick, so the pusher shares that process and its `Inverter` object. The rest of this file and
+  `docs/pi-deployment.md` describe this mode.
+
 ```
 Orange Pi (one python process, run by deye_bot.service)
  ├─ DeyeBot   (his, unchanged)  ─┐
@@ -17,10 +27,12 @@ Cloudflare Worker  ── /api/ingest (bearer PUSH_KEY) ──▶ D1
 
 | File | Purpose | Owner, mode on the Pi |
 |---|---|---|
-| `push_start.py` | Entry point. Adds the parent dir to `sys.path`, loads `../.env` and `push.env` **by explicit path**, builds `Inverter`, `DeyeBot`, `Looper` like his `start.py`, and adds `Pusher` | deye, 644 |
+| `standalone.py` | Standalone entry point (own connection, own unit `deye-pusher.service`) | – |
+| `requirements.txt` | Libraries for the standalone mode's venv | – |
+| `push_start.py` | Bot-mode entry point. Adds the parent dir to `sys.path`, loads `../.env` and `push.env` **by explicit path**, builds `Inverter`, `DeyeBot`, `Looper` like his `start.py`, and adds `Pusher` | deye, 644 |
 | `pusher.py` | Reader loop + sender loop + heartbeat | deye, 644 |
 | `run_push.sh` | Activates `../.venv`, runs `push_start.py`; if that fails → `exec` his `start.py` | deye, 755 |
-| `push.env` | `PUSH_URL`, `PUSH_KEY`, `PUSH_INTERVAL=30` (secret, not in git; commit `push.env.example`) | deye, 600 |
+| `push.env` | `PUSH_URL`, `PUSH_KEY`, `PUSH_INTERVAL=30` (+ `INVERTER_*` in standalone mode); secret, not in git; commit `push.env.example` | deye, 600 |
 | `override.conf` | Reference copy of the systemd drop-in | – |
 
 systemd drop-in `/etc/systemd/system/deye_bot.service.d/override.conf` (root, 644):
@@ -80,7 +92,10 @@ Raw registers are decoded **in the Worker**, so mapping fixes never need a card 
 
 ## Cloud side: `cloud/`
 
-- One Worker (TypeScript) with static assets (`cloud/web/`) + D1 binding. Wrangler config `cloud/wrangler.jsonc`.
+- One Worker (TypeScript) with static assets (`cloud/web/`) + D1 binding. Wrangler config `cloud/wrangler.jsonc`
+  (per installation, gitignored; template `cloud/wrangler.example.jsonc`). `worker-configuration.d.ts` is generated from
+  it by `npm run check` / `npm run types` and is gitignored too.
+- Yasno area: Worker vars `YASNO_REGION` / `YASNO_DSO` (default 25/902 = Kyiv, DTEK Kyiv Grids).
 - D1 tables (draft):
   - `samples(ts INTEGER PK, grid_on, soc, batt_w, load_a, load_b, load_c, load_total, pv_w, …)`: decoded, kept forever.
     At 30 s that's about 1.05 M rows/year at ~100 B, so ~100 MB/year. The D1 free plan limit is 500 MB per DB, so roll up later if needed.

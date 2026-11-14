@@ -1,4 +1,6 @@
 # secrets
+# private notes for Claude sessions (the author's hostname etc.); loaded automatically next to CLAUDE.md
+CLAUDE.local.md
 .env
 .env.*
 !.env.example
@@ -30,4 +32,8 @@ dist/
 # local test artifacts
 .playwright-mcp/
 tools/.work/
-.playwright-mcp/
+
+# per-installation Cloudflare config (account, domain, D1 id, Access AUD): copy cloud/wrangler.example.jsonc
+cloud/wrangler.jsonc
+# generated from wrangler.jsonc by `npm run types` / `npm run check`
+cloud/worker-configuration.d.ts

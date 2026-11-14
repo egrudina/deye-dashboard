@@ -1,0 +1,51 @@
+// Template. Copy to wrangler.jsonc (gitignored) and fill in the <...> values:
+//   cp wrangler.example.jsonc wrangler.jsonc
+// Step-by-step: README.md (section "Cloudflare").
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "deye",
+  // Optional: or export CLOUDFLARE_ACCOUNT_ID instead.
+  "account_id": "<your Cloudflare account id>",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-07",
+  "workers_dev": false,
+  "preview_urls": false,
+  // A hostname on a domain that is in this Cloudflare account. Cloudflare creates the DNS record itself.
+  "routes": [{ "pattern": "deye.example.com", "custom_domain": true }],
+  "assets": {
+    "directory": "web",
+    "binding": "ASSETS",
+    // The Worker checks the Access JWT before serving anything, including static files.
+    "run_worker_first": true
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "deye",
+      // From `npx wrangler d1 create deye` (or the dashboard: Storage & Databases → D1).
+      "database_id": "<your D1 database id>",
+      "migrations_dir": "migrations"
+    }
+  ],
+  // Hourly: purge raw_samples and heartbeats older than 7 days, calibration.
+  // Every 15 min: energy rollups, Yasno schedule, Solcast (when a call is due), notifications.
+  "triggers": { "crons": ["17 * * * *", "*/15 * * * *"] },
+  "vars": {
+    // Filled after the Access application exists (Zero Trust → Access → Applications → <app> → Overview).
+    // Empty = every non-ingest request gets 503 (fail closed).
+    "ACCESS_TEAM_DOMAIN": "https://<your-team>.cloudflareaccess.com",
+    "ACCESS_AUD": "<Application Audience (AUD) tag>",
+    // Yasno outage schedule area. 25/902 = Kyiv (DTEK Kyiv Grids), the default and the only tested one.
+    "YASNO_REGION": "25",
+    "YASNO_DSO": "902"
+  },
+  // Secrets (not here, set with `npx wrangler secret put <NAME>`):
+  //   PUSH_KEY (required); SOLCAST_API_KEY, SOLCAST_RESOURCE_ID (optional, solar forecast);
+  //   VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT (optional, push notifications).
+  // Local dev: .dev.vars (gitignored), see .dev.vars.example.
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1,
+    "traces": { "enabled": true, "head_sampling_rate": 0.1 }
+  }
+}

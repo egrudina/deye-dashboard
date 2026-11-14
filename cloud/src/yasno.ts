@@ -1,10 +1,23 @@
-// Yasno (DTEK Kyiv Grids) outage schedule: parsing and pure helpers. Network and DB code is in jobs.ts.
+// Yasno outage schedule: parsing and pure helpers. Network and DB code is in jobs.ts.
 
 export const YASNO_BASE = "https://app.yasno.ua/api/blackout-service/public/shutdowns";
-export const REGION = 25;
-export const DSO = 902;
-export const PLANNED_URL = `${YASNO_BASE}/regions/${REGION}/dsos/${DSO}/planned-outages`;
 export const ADDR_BASE = `${YASNO_BASE}/addresses/v2`;
+
+// Region and grid operator (DSO). Default: Kyiv, DTEK Kyiv Grids. Override with the Worker vars YASNO_REGION /
+// YASNO_DSO (list: GET ${ADDR_BASE}/regions). Only Kyiv is tested; regions with cities (Dnipro) need a city step
+// in the address lookup that is not implemented yet.
+export const DEFAULT_REGION = 25;
+export const DEFAULT_DSO = 902;
+
+export interface YasnoArea { region: number; dso: number }
+
+export function yasnoArea(env: object): YasnoArea {
+  const vars = env as Record<string, unknown>;
+  const num = (v: unknown, d: number) => (typeof v === "string" && /^\d+$/.test(v.trim()) ? Number(v.trim()) : d);
+  return { region: num(vars.YASNO_REGION, DEFAULT_REGION), dso: num(vars.YASNO_DSO, DEFAULT_DSO) };
+}
+
+export const plannedUrl = (a: YasnoArea) => `${YASNO_BASE}/regions/${a.region}/dsos/${a.dso}/planned-outages`;
 
 export type Slot = [number, number]; // minutes from Kyiv midnight [start, end)
 

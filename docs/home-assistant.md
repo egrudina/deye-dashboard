@@ -1,6 +1,6 @@
 # Home Assistant
 
-Home Assistant reads `GET https://deye.grudina.info/api/ha` once a minute: one flat JSON with live values,
+Home Assistant reads `GET https://<your host>/api/ha` once a minute: one flat JSON with live values,
 running kWh totals (for the Energy dashboard) and the plan (headline, next outage, battery forecast, schedule,
 sun forecast). Nothing in HA talks to the inverter, Yasno or Solcast, so the bot and the Solcast quota are safe.
 
@@ -20,7 +20,7 @@ only `/api/ha` (everything else answers 403).
    Keep the existing email policy as it is.
 3. Check from any computer (should print JSON, not HTML):
    ```
-   curl -s -H "CF-Access-Client-Id: <id>" -H "CF-Access-Client-Secret: <secret>" https://deye.grudina.info/api/ha | head -c 300
+   curl -s -H "CF-Access-Client-Id: <id>" -H "CF-Access-Client-Secret: <secret>" https://<your host>/api/ha | head -c 300
    ```
 
 ## 2. Home Assistant: the package
@@ -29,6 +29,7 @@ only `/api/ha` (everything else answers 403).
    ```yaml
    deye_access_client_id: "<Client ID>.access"
    deye_access_client_secret: "<Client Secret>"
+   deye_api_url: "https://<your host>/api/ha"
    ```
 2. `configuration.yaml` (if packages are not enabled yet):
    ```yaml
