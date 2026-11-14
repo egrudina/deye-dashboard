@@ -25,6 +25,17 @@ function autoHide(ev) {
 window.addEventListener("scroll", hideTip, { passive: true });
 document.addEventListener("pointerdown", (e) => { if (!e.target.closest?.(".chart")) hideTip(); });
 document.addEventListener("visibilitychange", hideTip);
+// iOS starts a text selection on a long press even with user-select: none when the finger drifts onto
+// neighbouring text. Block it at the source for anything inside a chart card, and drop any selection that
+// still sneaks in while a finger is on a chart.
+const inChart = (e) => e.target?.closest?.(".chart, .card:has(.chart)");
+document.addEventListener("selectstart", (e) => { if (inChart(e)) e.preventDefault(); });
+document.addEventListener("contextmenu", (e) => { if (inChart(e)) e.preventDefault(); });
+let chartTouch = false;
+document.addEventListener("pointerdown", (e) => { chartTouch = e.pointerType !== "mouse" && !!e.target.closest?.(".chart"); });
+document.addEventListener("pointerup", () => { chartTouch = false; });
+document.addEventListener("pointercancel", () => { chartTouch = false; });
+document.addEventListener("selectionchange", () => { if (chartTouch) window.getSelection()?.removeAllRanges(); });
 
 export const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 

@@ -56,6 +56,7 @@
 * { box-sizing: border-box; }
 html, body { margin: 0; background: var(--page); color: var(--ink); }
 body { font: 15px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; -webkit-tap-highlight-color: transparent; }
+.card:has(.chart), .chart * { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 h1 { font-size: 20px; margin: 0; }
 h2 { font-size: 16px; margin: 0 0 8px; }
 h3 { font-size: 13px; font-weight: 600; color: var(--ink-2); margin: 12px 0 4px; }
