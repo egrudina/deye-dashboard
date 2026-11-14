@@ -205,7 +205,7 @@ export function analyse(ctx: Context): Analysis {
 
   const hl = headline({
     now, gridOnNow: gridOn, soc: sample?.soc ?? 0, proj, scheduleKnown, emergency, scheduledSoon, recentDrop,
-    sunWh, needWh, lateReturn,
+    sunWh, needWh, sunRestWh: fcRest, lateReturn,
   });
 
   return {

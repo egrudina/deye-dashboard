@@ -19,6 +19,7 @@ export interface HeadlineInput {
   recentDrop: boolean;          // the grid went off in the last 7 days
   sunWh: number | null;         // forecast sun energy today (Kyiv day), corrected; null = no forecast
   needWh: number | null;        // expected need today
+  sunRestWh?: number | null;    // forecast sun still to come today; ~0 = the sun's day is over (past tense)
   lateReturn?: number | null;   // grid still off although the scheduled outage ended at this time, a few minutes ago
 }
 
@@ -51,6 +52,10 @@ const kwh = (wh: number) => {
   return v >= 10 ? Math.round(v).toString() : v.toFixed(1).replace(".", ",");
 };
 const pct = (v: number) => `${Math.round(v)}%`;
+/** The sun is done for today (after sunset): talk about it in the past tense. */
+const sunDone = (inp: HeadlineInput) =>
+  inp.sunRestWh != null && inp.sunWh != null && inp.sunRestWh < Math.max(30, inp.sunWh * 0.01);
+
 const runtime = (h: number) => (h >= 48 ? "понад дві доби" : `приблизно ${fmtHours(h * 3_600_000)}`);
 
 export function headline(inp: HeadlineInput): Headline {
@@ -72,10 +77,11 @@ function sunNote(inp: HeadlineInput): string | undefined {
   const { sunWh, needWh } = inp;
   if (sunWh == null || needWh == null || needWh <= 0) return undefined;
   const share = (sunWh / needWh) * 100;
-  if (share >= 100) return "Сьогодні сонце покриває все";
-  if (share < 3) return "Сьогодні сонця майже немає";
-  if (share < 25) return "Сьогодні сонця мало";
-  return `Сьогодні сонце покриє близько ${pct(share)} потреби`;
+  const done = sunDone(inp);
+  if (share >= 100) return done ? "Сьогодні сонце покрило все" : "Сьогодні сонце покриває все";
+  if (share < 3) return done ? "Сьогодні сонця майже не було" : "Сьогодні сонця майже немає";
+  if (share < 25) return done ? "Сьогодні сонця було мало" : "Сьогодні сонця мало";
+  return `Сьогодні сонце ${done ? "покрило" : "покриє"} близько ${pct(share)} потреби`;
 }
 
 const join = (...parts: (string | undefined)[]) => parts.filter(Boolean).map((p) => `${p}.`).join(" ") || undefined;
@@ -138,20 +144,21 @@ function sunHeadline(inp: HeadlineInput): Headline {
   if (sunWh == null || needWh == null || needWh <= 0) {
     return { mode: "plain", tone: "ok", text: inp.gridOnNow ? `Світло є. Батарея ${pct(inp.soc)}.` : `Світла немає. Батарея ${pct(inp.soc)}.` };
   }
+  const done = sunDone(inp);
   if (sunWh >= needWh) {
     return {
       mode: "sun_covers", tone: "ok",
-      text: "Сьогодні сонце покриває все: можна жити без мережі.",
-      detail: `Прогноз ${kwh(sunWh)} кВт·год, потреба ${kwh(needWh)} кВт·год.`,
+      text: done ? "Сьогодні сонце покрило все." : "Сьогодні сонце покриває все: можна жити без мережі.",
+      detail: `${done ? "Сонце дало" : "Прогноз"} ${kwh(sunWh)} кВт·год, потреба ${kwh(needWh)} кВт·год.`,
     };
   }
   const share = (sunWh / needWh) * 100;
   if (share < 3) {
-    return { mode: "sun_partial", tone: "info", text: "Сьогодні сонця майже не буде: усе з мережі.", detail: `Потреба ${kwh(needWh)} кВт·год.` };
+    return { mode: "sun_partial", tone: "info", text: done ? "Сьогодні сонця майже не було: усе з мережі." : "Сьогодні сонця майже не буде: усе з мережі.", detail: `Потреба ${kwh(needWh)} кВт·год.` };
   }
   return {
     mode: "sun_partial", tone: "info",
-    text: `Сьогодні сонце покриє близько ${pct(share)} потреби.`,
+    text: `Сьогодні сонце ${done ? "покрило" : "покриє"} близько ${pct(share)} потреби.`,
     detail: `Сонце ${kwh(sunWh)} з ${kwh(needWh)} кВт·год, решта ${kwh(needWh - sunWh)} кВт·год з мережі.`,
   };
 }

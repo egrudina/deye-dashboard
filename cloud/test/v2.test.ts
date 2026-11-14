@@ -359,6 +359,10 @@ test("headline: sun modes", () => {
   assert.match(p.detail!, /1,5 з 10 кВт·год/);
   assert.equal(headline(hin({ sunWh: 100, needWh: 10000 })).text, "Сьогодні сонця майже не буде: усе з мережі.");
   assert.equal(headline(hin()).mode, "plain");
+  // After sunset (nothing left in the forecast): past tense.
+  assert.equal(headline(hin({ sunWh: 5500, needWh: 20000, sunRestWh: 0 })).text, "Сьогодні сонце покрило близько 28% потреби.");
+  assert.equal(headline(hin({ sunWh: 5500, needWh: 20000, sunRestWh: 2000 })).text, "Сьогодні сонце покриє близько 28% потреби.");
+  assert.equal(headline(hin({ sunWh: 12000, needWh: 10000, sunRestWh: 10 })).text, "Сьогодні сонце покрило все.");
 });
 
 test("fmtClock: today, tomorrow", () => {

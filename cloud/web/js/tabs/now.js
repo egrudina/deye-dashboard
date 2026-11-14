@@ -87,7 +87,8 @@ function renderNow() {
   // The ring's tick and the "→" line: where the charge will be when the grid returns (same number as in the headline).
   const gh = d.ghost;
   let ghostSub = "", ghostWhen = "";
-  if (gh && !(gh.kind === "horizon" && Math.round(gh.soc) === Math.round(s.soc))) {
+  // A 2-day horizon only matters when it differs noticeably (99% → 100% "in 2 days" is noise).
+  if (gh && !(gh.kind === "horizon" && Math.abs(gh.soc - s.soc) < 5)) {
     ghostSub = `→ ${f.pct(gh.soc)}`;
     ghostWhen = gh.kind === "horizon" ? "за 2 доби" : gh.guessed || !gh.at ? "орієнтовно" : `о ${f.when(gh.at, now)}`;
   }
