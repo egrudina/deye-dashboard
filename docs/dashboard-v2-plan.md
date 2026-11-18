@@ -132,7 +132,7 @@ Source: the public Yasno API (the same one `ALERTua/ha-svitlo-yeah` uses).
   `houses?regionId=25&dsoId=902&streetId=…&query=…`,
   `group?regionId=25&dsoId=902&streetId=…&houseId=…` → `{group, subgroup}`.
 - Yasno changes its IDs every few days. Store the street and house **names**, resolve them
-  again once a week, and accept a changed group only after two matching checks at least an
+  again once a day, and accept a changed group only after two matching checks at least an
   hour apart.
 
 How to use it:

@@ -104,7 +104,7 @@ export interface AddressState {
   error?: string;           // last resolve error (shown in System)
 }
 
-export const RESOLVE_EVERY_MS = 7 * 86_400_000;
+export const RESOLVE_EVERY_MS = 86_400_000;
 export const CONFIRM_AFTER_MS = 3_600_000;
 
 /** Is a resolve due for this address now? */
